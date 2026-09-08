@@ -98,7 +98,7 @@ def find_divergence_details(closes, rsi_values, active_candles=5):
 def check_symbol(symbol):
     try:
         url = "https://api.toobit.com/quote/v1/klines"
-        params = {"symbol": symbol, "interval": "1m", "limit": 200}
+        params = {"symbol": symbol, "interval": "5m", "limit": 200}
         response = requests.get(url, params=params, timeout=5)
         data = response.json()
         
@@ -201,7 +201,7 @@ async def bot_loop():
                 chat_id = updates[-1].message.chat_id
                 
                 if not test_sent:
-                    await bot.send_message(chat_id=chat_id, text="✅ ربات واگرایی RSI (۱ دقیقه‌ای) فعال شد!")
+                    await bot.send_message(chat_id=chat_id, text="✅ ربات واگرایی RSI (۵ دقیقه‌ای - ۵ کندل) فعال شد!")
                     print("✅ پیام تست فرستاده شد")
                     test_sent = True
                 
@@ -223,11 +223,11 @@ async def bot_loop():
                             await bot.send_message(chat_id=chat_id, text=message)
                             print(f"✅ سیگنال: {signal['symbol']} - {signal['type']} - {signal['power_score']:.1f}%")
             
-            await asyncio.sleep(60)
+            await asyncio.sleep(300)
             
         except Exception as e:
             print(f"❌ خطا: {e}")
-            await asyncio.sleep(60)
+            await asyncio.sleep(300)
 
 def run():
     asyncio.run(bot_loop())
