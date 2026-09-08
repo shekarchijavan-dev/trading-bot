@@ -52,7 +52,7 @@ def calculate_rsi(closes, period=14):
         rsi_values.append(rsi)
     return rsi_values
 
-def find_divergence_details(closes, rsi_values, active_candles=5):
+def find_divergence_complete(closes, rsi_values):
     if len(closes) < 5 or len(rsi_values) < 5:
         return None
     
@@ -65,11 +65,14 @@ def find_divergence_details(closes, rsi_values, active_candles=5):
         if closes[i] == max(closes[i-2:i+3]):
             pivots_high.append(i)
     
+    last_idx = len(closes) - 1
+    
+    # واگرایی مثبت: نقطه آخر باید کندل آخر باشه
     for i in range(len(pivots_low) - 1):
         idx1 = pivots_low[i]
         idx2 = pivots_low[i + 1]
         
-        if len(closes) - idx2 <= active_candles:
+        if idx2 == last_idx or idx2 == last_idx - 1:
             if closes[idx2] < closes[idx1] and rsi_values[idx2] > rsi_values[idx1]:
                 return {
                     "type": "positive",
@@ -79,11 +82,12 @@ def find_divergence_details(closes, rsi_values, active_candles=5):
                     "rsi2": rsi_values[idx2]
                 }
     
+    # واگرایی منفی
     for i in range(len(pivots_high) - 1):
         idx1 = pivots_high[i]
         idx2 = pivots_high[i + 1]
         
-        if len(closes) - idx2 <= active_candles:
+        if idx2 == last_idx or idx2 == last_idx - 1:
             if closes[idx2] > closes[idx1] and rsi_values[idx2] < rsi_values[idx1]:
                 return {
                     "type": "negative",
@@ -115,7 +119,7 @@ def check_symbol(symbol):
         closes_for_rsi = closes[1:]
         rsi_14 = rsi_14[:len(closes_for_rsi)]
         
-        divergence = find_divergence_details(closes_for_rsi, rsi_14, active_candles=5)
+        divergence = find_divergence_complete(closes_for_rsi, rsi_14)
         
         if divergence:
             max_rsi_with_div = 14
@@ -124,7 +128,7 @@ def check_symbol(symbol):
             for period in range(15, 101):
                 rsi_test = calculate_rsi(closes, period)
                 rsi_test = rsi_test[:len(closes_for_rsi)]
-                div_test = find_divergence_details(closes_for_rsi, rsi_test, active_candles=5)
+                div_test = find_divergence_complete(closes_for_rsi, rsi_test)
                 
                 if div_test and div_test["type"] == divergence_type:
                     max_rsi_with_div = period
@@ -201,7 +205,7 @@ async def bot_loop():
                 chat_id = updates[-1].message.chat_id
                 
                 if not test_sent:
-                    await bot.send_message(chat_id=chat_id, text="✅ ربات واگرایی RSI (۵ دقیقه‌ای - ۵ کندل) فعال شد!")
+                    await bot.send_message(chat_id=chat_id, text="✅ ربات واگرایی کامل فعال شد!")
                     print("✅ پیام تست فرستاده شد")
                     test_sent = True
                 
