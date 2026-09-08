@@ -120,7 +120,7 @@ def check_symbol(symbol):
 
 async def bot_loop():
     bot = Bot(TOKEN)
-    symbols = get_all_symbols()[:200]
+    symbols = get_all_symbols()[:500]
     sent_signals = set()
     test_sent = False
     
@@ -131,7 +131,7 @@ async def bot_loop():
                 chat_id = updates[-1].message.chat_id
                 
                 if not test_sent:
-                    await bot.send_message(chat_id=chat_id, text="✅ ربات واگرایی RSI فعال شد!")
+                    await bot.send_message(chat_id=chat_id, text="✅ ربات واگرایی RSI با ۵۰۰ ارز فعال شد!")
                     print("✅ پیام تست فرستاده شد")
                     test_sent = True
                 
