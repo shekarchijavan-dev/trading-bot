@@ -1,4 +1,5 @@
 import requests
+import asyncio
 from telegram import Bot
 from telegram.request import HTTPXRequest
 from flask import Flask
@@ -106,7 +107,7 @@ def check_symbol(symbol):
         pass
     return None
 
-def bot_loop():
+async def bot_loop():
     request = HTTPXRequest(proxy=PROXY_URL)
     bot = Bot(TOKEN, request=request)
     symbols = get_all_symbols()[:100]
@@ -115,13 +116,12 @@ def bot_loop():
     
     while True:
         try:
-            updates = bot.get_updates()
+            updates = await bot.get_updates()
             if updates:
                 chat_id = updates[-1].message.chat_id
                 
-                # ارسال پیام تست فقط یه بار
                 if not test_sent:
-                    bot.send_message(chat_id=chat_id, text="✅ ربات فعال شد و داره چک می‌کنه!")
+                    await bot.send_message(chat_id=chat_id, text="✅ ربات فعال شد و داره چک می‌کنه!")
                     print("✅ پیام تست فرستاده شد")
                     test_sent = True
                 
@@ -136,15 +136,18 @@ def bot_loop():
                             message += f"📊 {signal['symbol']}\n"
                             message += f"💰 قیمت: {signal['current_price']}\n"
                             message += f"📊 RSI: {signal['rsi_current']:.2f}\n"
-                            bot.send_message(chat_id=chat_id, text=message)
+                            await bot.send_message(chat_id=chat_id, text=message)
                             print(f"✅ سیگنال: {signal['symbol']}")
             
-            time.sleep(60)
+            await asyncio.sleep(60)
         except Exception as e:
             print(f"❌ خطا: {e}")
-            time.sleep(60)
+            await asyncio.sleep(60)
 
-threading.Thread(target=bot_loop, daemon=True).start()
+def run_bot():
+    asyncio.run(bot_loop())
+
+threading.Thread(target=run_bot, daemon=True).start()
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
