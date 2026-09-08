@@ -111,11 +111,20 @@ def bot_loop():
     bot = Bot(TOKEN, request=request)
     symbols = get_all_symbols()[:100]
     sent_signals = set()
+    test_sent = False
+    
     while True:
         try:
             updates = bot.get_updates()
             if updates:
                 chat_id = updates[-1].message.chat_id
+                
+                # ارسال پیام تست فقط یه بار
+                if not test_sent:
+                    bot.send_message(chat_id=chat_id, text="✅ ربات فعال شد و داره چک می‌کنه!")
+                    print("✅ پیام تست فرستاده شد")
+                    test_sent = True
+                
                 for symbol in symbols:
                     signal = check_symbol(symbol)
                     if signal:
@@ -129,6 +138,7 @@ def bot_loop():
                             message += f"📊 RSI: {signal['rsi_current']:.2f}\n"
                             bot.send_message(chat_id=chat_id, text=message)
                             print(f"✅ سیگنال: {signal['symbol']}")
+            
             time.sleep(60)
         except Exception as e:
             print(f"❌ خطا: {e}")
