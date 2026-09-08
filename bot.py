@@ -65,7 +65,7 @@ def find_divergence(closes, rsi_values):
         if closes[i] == max(closes[i-2:i+3]):
             pivots_high.append(i)
     
-    # واگرایی مثبت (صعودی): قیمت کف پایین‌تر + RSI کف بالاتر
+    # واگرایی مثبت (صعودی)
     for i in range(len(pivots_low) - 1):
         idx1 = pivots_low[i]
         idx2 = pivots_low[i + 1]
@@ -74,7 +74,7 @@ def find_divergence(closes, rsi_values):
             if closes[idx2] < closes[idx1] and rsi_values[idx2] > rsi_values[idx1]:
                 return "positive"
     
-    # واگرایی منفی (نزولی): قیمت سقف بالاتر + RSI سقف پایین‌تر
+    # واگرایی منفی (نزولی)
     for i in range(len(pivots_high) - 1):
         idx1 = pivots_high[i]
         idx2 = pivots_high[i + 1]
@@ -120,7 +120,7 @@ def check_symbol(symbol):
 
 async def bot_loop():
     bot = Bot(TOKEN)
-    symbols = get_all_symbols()[:100]
+    symbols = get_all_symbols()[:200]
     sent_signals = set()
     test_sent = False
     
@@ -151,7 +151,7 @@ async def bot_loop():
                             await bot.send_message(chat_id=chat_id, text=message)
                             print(f"✅ سیگنال: {signal['symbol']} - {signal['type']}")
             
-            await asyncio.sleep(300)  # هر ۵ دقیقه چک کن
+            await asyncio.sleep(300)
             
         except Exception as e:
             print(f"❌ خطا: {e}")
