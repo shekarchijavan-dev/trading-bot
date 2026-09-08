@@ -52,7 +52,7 @@ def calculate_rsi(closes, period=14):
         rsi_values.append(rsi)
     return rsi_values
 
-def find_divergence_details(closes, rsi_values):
+def find_divergence_details(closes, rsi_values, active_candles=5):
     if len(closes) < 5 or len(rsi_values) < 5:
         return None
     
@@ -65,12 +65,11 @@ def find_divergence_details(closes, rsi_values):
         if closes[i] == max(closes[i-2:i+3]):
             pivots_high.append(i)
     
-    # واگرایی مثبت
     for i in range(len(pivots_low) - 1):
         idx1 = pivots_low[i]
         idx2 = pivots_low[i + 1]
         
-        if len(closes) - idx2 <= 3:
+        if len(closes) - idx2 <= active_candles:
             if closes[idx2] < closes[idx1] and rsi_values[idx2] > rsi_values[idx1]:
                 return {
                     "type": "positive",
@@ -80,12 +79,11 @@ def find_divergence_details(closes, rsi_values):
                     "rsi2": rsi_values[idx2]
                 }
     
-    # واگرایی منفی
     for i in range(len(pivots_high) - 1):
         idx1 = pivots_high[i]
         idx2 = pivots_high[i + 1]
         
-        if len(closes) - idx2 <= 3:
+        if len(closes) - idx2 <= active_candles:
             if closes[idx2] > closes[idx1] and rsi_values[idx2] < rsi_values[idx1]:
                 return {
                     "type": "negative",
@@ -100,7 +98,7 @@ def find_divergence_details(closes, rsi_values):
 def check_symbol(symbol):
     try:
         url = "https://api.toobit.com/quote/v1/klines"
-        params = {"symbol": symbol, "interval": "5m", "limit": 200}
+        params = {"symbol": symbol, "interval": "1m", "limit": 200}
         response = requests.get(url, params=params, timeout=5)
         data = response.json()
         
@@ -117,34 +115,28 @@ def check_symbol(symbol):
         closes_for_rsi = closes[1:]
         rsi_14 = rsi_14[:len(closes_for_rsi)]
         
-        divergence = find_divergence_details(closes_for_rsi, rsi_14)
+        divergence = find_divergence_details(closes_for_rsi, rsi_14, active_candles=5)
         
         if divergence:
-            # تست RSI تا ۱۰۰
             max_rsi_with_div = 14
             divergence_type = divergence["type"]
             
             for period in range(15, 101):
                 rsi_test = calculate_rsi(closes, period)
                 rsi_test = rsi_test[:len(closes_for_rsi)]
-                div_test = find_divergence_details(closes_for_rsi, rsi_test)
+                div_test = find_divergence_details(closes_for_rsi, rsi_test, active_candles=5)
                 
                 if div_test and div_test["type"] == divergence_type:
                     max_rsi_with_div = period
                 else:
                     break
             
-            # محاسبه قدرت سیگنال
             rsi_diff = abs(divergence["rsi2"] - divergence["rsi1"])
             distance = divergence["idx2"] - divergence["idx1"]
             
-            # امتیاز قوی‌ترین RSI (۴۰٪)
             score_rsi_strength = min((max_rsi_with_div - 14) / 86 * 100, 100)
-            
-            # امتیاز اختلاف RSI (۳۰٪)
             score_rsi_diff = min(rsi_diff / 20 * 100, 100)
             
-            # امتیاز فاصله (۱۵٪)
             if distance <= 10:
                 score_distance = 100
             elif distance <= 20:
@@ -154,7 +146,6 @@ def check_symbol(symbol):
             else:
                 score_distance = 30
             
-            # امتیاز موقعیت RSI (۱۵٪)
             if divergence_type == "positive":
                 if rsi_14[-1] < 40:
                     score_position = 100
@@ -170,7 +161,6 @@ def check_symbol(symbol):
                 else:
                     score_position = 40
             
-            # قدرت نهایی
             power_score = (
                 score_rsi_strength * 0.4 +
                 score_rsi_diff * 0.3 +
@@ -211,7 +201,7 @@ async def bot_loop():
                 chat_id = updates[-1].message.chat_id
                 
                 if not test_sent:
-                    await bot.send_message(chat_id=chat_id, text="✅ ربات واگرایی RSI با قدرت سیگنال فعال شد!")
+                    await bot.send_message(chat_id=chat_id, text="✅ ربات واگرایی RSI (۱ دقیقه‌ای) فعال شد!")
                     print("✅ پیام تست فرستاده شد")
                     test_sent = True
                 
@@ -233,11 +223,11 @@ async def bot_loop():
                             await bot.send_message(chat_id=chat_id, text=message)
                             print(f"✅ سیگنال: {signal['symbol']} - {signal['type']} - {signal['power_score']:.1f}%")
             
-            await asyncio.sleep(300)
+            await asyncio.sleep(60)
             
         except Exception as e:
             print(f"❌ خطا: {e}")
-            await asyncio.sleep(300)
+            await asyncio.sleep(60)
 
 def run():
     asyncio.run(bot_loop())
