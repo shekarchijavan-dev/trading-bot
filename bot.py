@@ -52,7 +52,7 @@ def calculate_rsi(closes, period=14):
         rsi_values.append(rsi)
     return rsi_values
 
-def find_divergence(closes, rsi_values):
+def find_divergence_details(closes, rsi_values):
     if len(closes) < 5 or len(rsi_values) < 5:
         return None
     
@@ -65,23 +65,35 @@ def find_divergence(closes, rsi_values):
         if closes[i] == max(closes[i-2:i+3]):
             pivots_high.append(i)
     
-    # واگرایی مثبت (صعودی)
+    # واگرایی مثبت
     for i in range(len(pivots_low) - 1):
         idx1 = pivots_low[i]
         idx2 = pivots_low[i + 1]
         
         if len(closes) - idx2 <= 3:
             if closes[idx2] < closes[idx1] and rsi_values[idx2] > rsi_values[idx1]:
-                return "positive"
+                return {
+                    "type": "positive",
+                    "idx1": idx1,
+                    "idx2": idx2,
+                    "rsi1": rsi_values[idx1],
+                    "rsi2": rsi_values[idx2]
+                }
     
-    # واگرایی منفی (نزولی)
+    # واگرایی منفی
     for i in range(len(pivots_high) - 1):
         idx1 = pivots_high[i]
         idx2 = pivots_high[i + 1]
         
         if len(closes) - idx2 <= 3:
             if closes[idx2] > closes[idx1] and rsi_values[idx2] < rsi_values[idx1]:
-                return "negative"
+                return {
+                    "type": "negative",
+                    "idx1": idx1,
+                    "idx2": idx2,
+                    "rsi1": rsi_values[idx1],
+                    "rsi2": rsi_values[idx2]
+                }
     
     return None
 
@@ -105,14 +117,82 @@ def check_symbol(symbol):
         closes_for_rsi = closes[1:]
         rsi_14 = rsi_14[:len(closes_for_rsi)]
         
-        divergence = find_divergence(closes_for_rsi, rsi_14)
+        divergence = find_divergence_details(closes_for_rsi, rsi_14)
         
         if divergence:
+            # تست RSI تا ۱۰۰
+            max_rsi_with_div = 14
+            divergence_type = divergence["type"]
+            
+            for period in range(15, 101):
+                rsi_test = calculate_rsi(closes, period)
+                rsi_test = rsi_test[:len(closes_for_rsi)]
+                div_test = find_divergence_details(closes_for_rsi, rsi_test)
+                
+                if div_test and div_test["type"] == divergence_type:
+                    max_rsi_with_div = period
+                else:
+                    break
+            
+            # محاسبه قدرت سیگنال
+            rsi_diff = abs(divergence["rsi2"] - divergence["rsi1"])
+            distance = divergence["idx2"] - divergence["idx1"]
+            
+            # امتیاز قوی‌ترین RSI (۴۰٪)
+            score_rsi_strength = min((max_rsi_with_div - 14) / 86 * 100, 100)
+            
+            # امتیاز اختلاف RSI (۳۰٪)
+            score_rsi_diff = min(rsi_diff / 20 * 100, 100)
+            
+            # امتیاز فاصله (۱۵٪)
+            if distance <= 10:
+                score_distance = 100
+            elif distance <= 20:
+                score_distance = 70
+            elif distance <= 40:
+                score_distance = 50
+            else:
+                score_distance = 30
+            
+            # امتیاز موقعیت RSI (۱۵٪)
+            if divergence_type == "positive":
+                if rsi_14[-1] < 40:
+                    score_position = 100
+                elif rsi_14[-1] < 50:
+                    score_position = 70
+                else:
+                    score_position = 40
+            else:
+                if rsi_14[-1] > 60:
+                    score_position = 100
+                elif rsi_14[-1] > 50:
+                    score_position = 70
+                else:
+                    score_position = 40
+            
+            # قدرت نهایی
+            power_score = (
+                score_rsi_strength * 0.4 +
+                score_rsi_diff * 0.3 +
+                score_distance * 0.15 +
+                score_position * 0.15
+            )
+            
+            if power_score >= 70:
+                power_label = "قوی 💪"
+            elif power_score >= 50:
+                power_label = "متوسط 👍"
+            else:
+                power_label = "ضعیف ⚠️"
+            
             return {
                 "symbol": symbol,
-                "type": divergence,
+                "type": divergence_type,
                 "current_price": closes[-1],
-                "rsi_current": rsi_14[-1]
+                "rsi_current": rsi_14[-1],
+                "max_rsi": max_rsi_with_div,
+                "power_score": power_score,
+                "power_label": power_label
             }
     except:
         pass
@@ -131,7 +211,7 @@ async def bot_loop():
                 chat_id = updates[-1].message.chat_id
                 
                 if not test_sent:
-                    await bot.send_message(chat_id=chat_id, text="✅ ربات واگرایی RSI با ۵۰۰ ارز فعال شد!")
+                    await bot.send_message(chat_id=chat_id, text="✅ ربات واگرایی RSI با قدرت سیگنال فعال شد!")
                     print("✅ پیام تست فرستاده شد")
                     test_sent = True
                 
@@ -147,9 +227,11 @@ async def bot_loop():
                             message += f"📊 {signal['symbol']}\n"
                             message += f"💰 قیمت: {signal['current_price']}\n"
                             message += f"📊 RSI: {signal['rsi_current']:.2f}\n"
+                            message += f"💪 قوی‌ترین RSI: {signal['max_rsi']}\n"
+                            message += f"🎯 قدرت سیگنال: {signal['power_score']:.1f}٪ ({signal['power_label']})\n"
                             
                             await bot.send_message(chat_id=chat_id, text=message)
-                            print(f"✅ سیگنال: {signal['symbol']} - {signal['type']}")
+                            print(f"✅ سیگنال: {signal['symbol']} - {signal['type']} - {signal['power_score']:.1f}%")
             
             await asyncio.sleep(300)
             
