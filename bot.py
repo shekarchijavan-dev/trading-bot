@@ -99,9 +99,8 @@ def check_divergence_live(symbol):
                 pivots_high.append(i)
         
         now_ms = int(datetime.now().timestamp() * 1000)
-        max_age_ms = 5 * 60 * 1000  # فقط ۵ دقیقه اخیر
+        max_age_ms = 5 * 60 * 1000
         
-        # صعودی
         for i in range(len(pivots_low) - 1):
             idx1 = pivots_low[i]
             idx2 = pivots_low[i + 1]
@@ -123,7 +122,6 @@ def check_divergence_live(symbol):
                         "p2_rsi": rsi[idx2]
                     }
         
-        # نزولی
         for i in range(len(pivots_high) - 1):
             idx1 = pivots_high[i]
             idx2 = pivots_high[i + 1]
@@ -153,6 +151,7 @@ async def bot_loop():
     symbols = get_all_symbols()[:100]
     sent_signals = set()
     test_sent = False
+    check_count = 0
     
     while True:
         try:
@@ -161,8 +160,11 @@ async def bot_loop():
                 chat_id = updates[-1].message.chat_id
                 
                 if not test_sent:
-                    await bot.send_message(chat_id=chat_id, text="✅ ربات واگرایی زنده فعال شد!")
+                    await bot.send_message(chat_id=chat_id, text="✅ ربات شروع به کار کرد!")
                     test_sent = True
+                
+                # چک کردن همه ارزها
+                signals_found = []
                 
                 for symbol in symbols:
                     signal = check_divergence_live(symbol)
@@ -170,20 +172,23 @@ async def bot_loop():
                         key = f"{symbol}_{signal['type']}_{signal['p2_time']}"
                         if key not in sent_signals:
                             sent_signals.add(key)
+                            signals_found.append(signal)
                             
                             message = f"🚨 **واگرایی {signal['type']}**\n\n"
                             message += f"📊 {symbol}\n"
-                            message += f"💰 قیمت لحظه‌ای: {signal['price']}\n"
-                            message += f"📊 RSI لحظه‌ای: {signal['rsi']:.2f}\n\n"
-                            message += f"📍 نقطه ۱: {signal['p1_time']}\n"
-                            message += f"   قیمت: {signal['p1_price']:.6f} | RSI: {signal['p1_rsi']:.2f}\n\n"
-                            message += f"📍 نقطه ۲: {signal['p2_time']}\n"
-                            message += f"   قیمت: {signal['p2_price']:.6f} | RSI: {signal['p2_rsi']:.2f}\n"
+                            message += f"💰 قیمت: {signal['price']}\n"
+                            message += f"📊 RSI: {signal['rsi']:.2f}\n\n"
+                            message += f"📍 نقطه ۱: {signal['p1_time']} | قیمت {signal['p1_price']:.6f} | RSI {signal['p1_rsi']:.2f}\n"
+                            message += f"📍 نقطه ۲: {signal['p2_time']} | قیمت {signal['p2_price']:.6f} | RSI {signal['p2_rsi']:.2f}\n"
                             
                             await bot.send_message(chat_id=chat_id, text=message)
                             print(f"✅ سیگنال: {symbol}")
-            
-            await asyncio.sleep(60)  # هر ۱ دقیقه
+                
+                check_count += 1
+                current_time = datetime.now().strftime('%H:%M')
+                print(f"⏰ دور {check_count}: {len(signals_found)} سیگنال پیدا شد - {current_time}")
+                
+            await asyncio.sleep(60)
             
         except Exception as e:
             print(f"❌ خطا: {e}")
