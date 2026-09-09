@@ -3,6 +3,7 @@ import asyncio
 from telegram import Bot
 from flask import Flask
 import threading
+from datetime import datetime
 
 app = Flask(__name__)
 
@@ -52,7 +53,7 @@ def calculate_rsi(closes, period=14):
         rsi_values.append(rsi)
     return rsi_values
 
-def find_divergence_complete(closes, rsi_values, max_candles_back=3):
+def find_divergence_recent(closes, rsi_values, times, max_age_candles=3):
     if len(closes) < 5 or len(rsi_values) < 5:
         return None
     
@@ -65,21 +66,25 @@ def find_divergence_complete(closes, rsi_values, max_candles_back=3):
         if closes[i] == max(closes[i-2:i+3]):
             pivots_high.append(i)
     
-    last_idx = len(closes) - 1
+    last_time = times[-1]
+    max_age_ms = max_age_candles * 5 * 60 * 1000  # ۳ کندل = ۱۵ دقیقه
     
-    # واگرایی مثبت - نقطه ۲ تا ۳ کندل آخر باشه
+    # واگرایی مثبت - نقطه ۲ باید حداکثر ۳ کندل ازش گذشته باشه
     for i in range(len(pivots_low) - 1):
         idx1 = pivots_low[i]
         idx2 = pivots_low[i + 1]
         
-        if last_idx - idx2 <= max_candles_back:
+        age = last_time - times[idx2]
+        
+        if 0 <= age <= max_age_ms:
             if closes[idx2] < closes[idx1] and rsi_values[idx2] > rsi_values[idx1]:
                 return {
                     "type": "positive",
                     "idx1": idx1,
                     "idx2": idx2,
                     "rsi1": rsi_values[idx1],
-                    "rsi2": rsi_values[idx2]
+                    "rsi2": rsi_values[idx2],
+                    "age_minutes": age / 60000
                 }
     
     # واگرایی منفی
@@ -87,14 +92,17 @@ def find_divergence_complete(closes, rsi_values, max_candles_back=3):
         idx1 = pivots_high[i]
         idx2 = pivots_high[i + 1]
         
-        if last_idx - idx2 <= max_candles_back:
+        age = last_time - times[idx2]
+        
+        if 0 <= age <= max_age_ms:
             if closes[idx2] > closes[idx1] and rsi_values[idx2] < rsi_values[idx1]:
                 return {
                     "type": "negative",
                     "idx1": idx1,
                     "idx2": idx2,
                     "rsi1": rsi_values[idx1],
-                    "rsi2": rsi_values[idx2]
+                    "rsi2": rsi_values[idx2],
+                    "age_minutes": age / 60000
                 }
     
     return None
@@ -110,16 +118,19 @@ def check_symbol(symbol):
             return None
         
         closes = [float(c[4]) for c in data]
+        times = [int(c[0]) for c in data]
         
         rsi_14 = calculate_rsi(closes, 14)
         
         if len(rsi_14) < 5:
             return None
         
-        closes_for_rsi = closes[1:]
-        rsi_14 = rsi_14[:len(closes_for_rsi)]
+        min_len = min(len(closes), len(rsi_14), len(times))
+        closes = closes[-min_len:]
+        times = times[-min_len:]
+        rsi_14 = rsi_14[-min_len:]
         
-        divergence = find_divergence_complete(closes_for_rsi, rsi_14, max_candles_back=3)
+        divergence = find_divergence_recent(closes, rsi_14, times, max_age_candles=3)
         
         if divergence:
             max_rsi_with_div = 14
@@ -127,8 +138,8 @@ def check_symbol(symbol):
             
             for period in range(15, 101):
                 rsi_test = calculate_rsi(closes, period)
-                rsi_test = rsi_test[:len(closes_for_rsi)]
-                div_test = find_divergence_complete(closes_for_rsi, rsi_test, max_candles_back=3)
+                rsi_test = rsi_test[-min_len:]
+                div_test = find_divergence_recent(closes, rsi_test, times, max_age_candles=3)
                 
                 if div_test and div_test["type"] == divergence_type:
                     max_rsi_with_div = period
@@ -186,7 +197,8 @@ def check_symbol(symbol):
                 "rsi_current": rsi_14[-1],
                 "max_rsi": max_rsi_with_div,
                 "power_score": power_score,
-                "power_label": power_label
+                "power_label": power_label,
+                "age_minutes": divergence["age_minutes"]
             }
     except:
         pass
@@ -205,7 +217,7 @@ async def bot_loop():
                 chat_id = updates[-1].message.chat_id
                 
                 if not test_sent:
-                    await bot.send_message(chat_id=chat_id, text="✅ ربات واگرایی (تا ۳ کندل) فعال شد!")
+                    await bot.send_message(chat_id=chat_id, text="✅ ربات واگرایی (تشخیص تا ۳ کندل بعد) فعال شد!")
                     print("✅ پیام تست فرستاده شد")
                     test_sent = True
                 
@@ -222,6 +234,7 @@ async def bot_loop():
                             message += f"💰 قیمت: {signal['current_price']}\n"
                             message += f"📊 RSI: {signal['rsi_current']:.2f}\n"
                             message += f"💪 قوی‌ترین RSI: {signal['max_rsi']}\n"
+                            message += f"⏰ سن واگرایی: {signal['age_minutes']:.0f} دقیقه\n"
                             message += f"🎯 قدرت سیگنال: {signal['power_score']:.1f}٪ ({signal['power_label']})\n"
                             
                             await bot.send_message(chat_id=chat_id, text=message)
