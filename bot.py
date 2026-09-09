@@ -103,12 +103,12 @@ def check_divergence_live(symbol):
         
         last_idx = len(closes) - 1
         
-        # صعودی
+        # واگرایی صعودی - نقطه ۲ تا ۲ کندل آخر
         for i in range(len(pivots_low) - 1):
             idx1 = pivots_low[i]
             idx2 = pivots_low[i + 1]
             
-            if idx2 >= last_idx - 1:
+            if idx2 >= last_idx - 2:
                 if closes[idx2] < closes[idx1] and rsi[idx2] > rsi[idx1]:
                     t1 = datetime.fromtimestamp(times[idx1]/1000).strftime('%H:%M')
                     t2 = datetime.fromtimestamp(times[idx2]/1000).strftime('%H:%M')
@@ -124,12 +124,12 @@ def check_divergence_live(symbol):
                         "p2_rsi": rsi[idx2]
                     }
         
-        # نزولی
+        # واگرایی نزولی - نقطه ۲ تا ۲ کندل آخر
         for i in range(len(pivots_high) - 1):
             idx1 = pivots_high[i]
             idx2 = pivots_high[i + 1]
             
-            if idx2 >= last_idx - 1:
+            if idx2 >= last_idx - 2:
                 if closes[idx2] > closes[idx1] and rsi[idx2] < rsi[idx1]:
                     t1 = datetime.fromtimestamp(times[idx1]/1000).strftime('%H:%M')
                     t2 = datetime.fromtimestamp(times[idx2]/1000).strftime('%H:%M')
@@ -161,7 +161,7 @@ async def bot_loop():
                 chat_id = updates[-1].message.chat_id
                 
                 if not test_sent:
-                    await bot.send_message(chat_id=chat_id, text="✅ ربات واگرایی لحظه‌ای (۵ دقیقه‌ای) فعال شد!")
+                    await bot.send_message(chat_id=chat_id, text="✅ ربات واگرایی لحظه‌ای فعال شد!")
                     test_sent = True
                 
                 for symbol in symbols:
@@ -183,7 +183,7 @@ async def bot_loop():
                             await bot.send_message(chat_id=chat_id, text=message)
                             print(f"✅ سیگنال: {symbol}")
             
-            await asyncio.sleep(30)  # هر ۳۰ ثانیه
+            await asyncio.sleep(30)
             
         except Exception as e:
             print(f"❌ خطا: {e}")
