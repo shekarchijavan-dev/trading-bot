@@ -55,7 +55,6 @@ def calculate_rsi(closes, period=14):
 
 def check_divergence_live(symbol):
     try:
-        # گرفتن قیمت لحظه‌ای
         url_ticker = "https://api.toobit.com/quote/v1/ticker/bookTicker"
         response_ticker = requests.get(url_ticker, timeout=5)
         data_ticker = response_ticker.json()
@@ -69,9 +68,8 @@ def check_divergence_live(symbol):
         if live_price is None:
             return None
         
-        # گرفتن کندل‌های ۵ دقیقه‌ای
         url = "https://api.toobit.com/quote/v1/klines"
-        params = {"symbol": symbol, "interval": "5m", "limit": 100}
+        params = {"symbol": symbol, "interval": "5m", "limit": 50}
         response = requests.get(url, params=params, timeout=5)
         data = response.json()
         
@@ -81,7 +79,6 @@ def check_divergence_live(symbol):
         closes = [float(c[4]) for c in data]
         times = [int(c[0]) for c in data]
         
-        # اضافه کردن قیمت لحظه‌ای
         closes.append(live_price)
         times.append(int(datetime.now().timestamp() * 1000))
         
@@ -101,14 +98,16 @@ def check_divergence_live(symbol):
             if closes[i] == max(closes[i-2:i+3]):
                 pivots_high.append(i)
         
-        last_idx = len(closes) - 1
+        now_ms = int(datetime.now().timestamp() * 1000)
+        max_age_ms = 5 * 60 * 1000  # فقط ۵ دقیقه اخیر
         
-        # واگرایی صعودی - نقطه ۲ تا ۲ کندل آخر
+        # صعودی
         for i in range(len(pivots_low) - 1):
             idx1 = pivots_low[i]
             idx2 = pivots_low[i + 1]
+            age = now_ms - times[idx2]
             
-            if idx2 >= last_idx - 2:
+            if 0 <= age <= max_age_ms:
                 if closes[idx2] < closes[idx1] and rsi[idx2] > rsi[idx1]:
                     t1 = datetime.fromtimestamp(times[idx1]/1000).strftime('%H:%M')
                     t2 = datetime.fromtimestamp(times[idx2]/1000).strftime('%H:%M')
@@ -124,12 +123,13 @@ def check_divergence_live(symbol):
                         "p2_rsi": rsi[idx2]
                     }
         
-        # واگرایی نزولی - نقطه ۲ تا ۲ کندل آخر
+        # نزولی
         for i in range(len(pivots_high) - 1):
             idx1 = pivots_high[i]
             idx2 = pivots_high[i + 1]
+            age = now_ms - times[idx2]
             
-            if idx2 >= last_idx - 2:
+            if 0 <= age <= max_age_ms:
                 if closes[idx2] > closes[idx1] and rsi[idx2] < rsi[idx1]:
                     t1 = datetime.fromtimestamp(times[idx1]/1000).strftime('%H:%M')
                     t2 = datetime.fromtimestamp(times[idx2]/1000).strftime('%H:%M')
@@ -161,7 +161,7 @@ async def bot_loop():
                 chat_id = updates[-1].message.chat_id
                 
                 if not test_sent:
-                    await bot.send_message(chat_id=chat_id, text="✅ ربات واگرایی لحظه‌ای فعال شد!")
+                    await bot.send_message(chat_id=chat_id, text="✅ ربات واگرایی زنده فعال شد!")
                     test_sent = True
                 
                 for symbol in symbols:
@@ -183,11 +183,11 @@ async def bot_loop():
                             await bot.send_message(chat_id=chat_id, text=message)
                             print(f"✅ سیگنال: {symbol}")
             
-            await asyncio.sleep(30)
+            await asyncio.sleep(60)  # هر ۱ دقیقه
             
         except Exception as e:
             print(f"❌ خطا: {e}")
-            await asyncio.sleep(30)
+            await asyncio.sleep(60)
 
 def run():
     asyncio.run(bot_loop())
