@@ -53,7 +53,7 @@ def calculate_rsi(closes, period=14):
         rsi_values.append(rsi)
     return rsi_values
 
-def check_divergence(symbol):
+def check_divergence_live(symbol):
     try:
         url = "https://api.toobit.com/quote/v1/klines"
         params = {"symbol": symbol, "interval": "5m", "limit": 100}
@@ -81,16 +81,12 @@ def check_divergence(symbol):
             if closes[i] == max(closes[i-2:i+3]):
                 pivots_high.append(i)
         
-        last_time = times[-1]
-        last_idx = len(closes) - 1
-        max_age_ms = 1 * 5 * 60 * 1000
-        
+        # واگرایی صعودی - نقطه ۲ می‌تونه کندل آخر یا یکی مانده به آخر باشه
         for i in range(len(pivots_low) - 1):
             idx1 = pivots_low[i]
             idx2 = pivots_low[i + 1]
-            age = last_time - times[idx2]
             
-            if 0 <= age <= max_age_ms and idx2 >= last_idx - 1:
+            if idx2 >= len(closes) - 2:
                 if closes[idx2] < closes[idx1] and rsi[idx2] > rsi[idx1]:
                     t1 = datetime.fromtimestamp(times[idx1]/1000).strftime('%H:%M')
                     t2 = datetime.fromtimestamp(times[idx2]/1000).strftime('%H:%M')
@@ -106,12 +102,12 @@ def check_divergence(symbol):
                         "p2_rsi": rsi[idx2]
                     }
         
+        # واگرایی نزولی
         for i in range(len(pivots_high) - 1):
             idx1 = pivots_high[i]
             idx2 = pivots_high[i + 1]
-            age = last_time - times[idx2]
             
-            if 0 <= age <= max_age_ms and idx2 >= last_idx - 1:
+            if idx2 >= len(closes) - 2:
                 if closes[idx2] > closes[idx1] and rsi[idx2] < rsi[idx1]:
                     t1 = datetime.fromtimestamp(times[idx1]/1000).strftime('%H:%M')
                     t2 = datetime.fromtimestamp(times[idx2]/1000).strftime('%H:%M')
@@ -143,11 +139,11 @@ async def bot_loop():
                 chat_id = updates[-1].message.chat_id
                 
                 if not test_sent:
-                    await bot.send_message(chat_id=chat_id, text="✅ ربات واگرایی فعال شد!")
+                    await bot.send_message(chat_id=chat_id, text="✅ ربات واگرایی لحظه‌ای فعال شد!")
                     test_sent = True
                 
                 for symbol in symbols:
-                    signal = check_divergence(symbol)
+                    signal = check_divergence_live(symbol)
                     if signal:
                         key = f"{symbol}_{signal['type']}_{signal['p2_time']}"
                         if key not in sent_signals:
@@ -165,7 +161,7 @@ async def bot_loop():
                             await bot.send_message(chat_id=chat_id, text=message)
                             print(f"✅ سیگنال: {symbol}")
             
-            await asyncio.sleep(60)  # هر ۱ دقیقه چک کن
+            await asyncio.sleep(60)  # هر ۱ دقیقه
             
         except Exception as e:
             print(f"❌ خطا: {e}")
