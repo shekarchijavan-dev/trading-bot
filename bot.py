@@ -82,7 +82,8 @@ def check_divergence(symbol):
                 pivots_high.append(i)
         
         last_time = times[-1]
-        max_age_ms = 2 * 5 * 60 * 1000  # ۲ کندل = ۱۰ دقیقه
+        last_idx = len(closes) - 1
+        max_age_ms = 1 * 5 * 60 * 1000  # فقط ۵ دقیقه اخیر
         
         # صعودی
         for i in range(len(pivots_low) - 1):
@@ -90,7 +91,7 @@ def check_divergence(symbol):
             idx2 = pivots_low[i + 1]
             age = last_time - times[idx2]
             
-            if 0 <= age <= max_age_ms:
+            if 0 <= age <= max_age_ms and idx2 >= last_idx - 1:
                 if closes[idx2] < closes[idx1] and rsi[idx2] > rsi[idx1]:
                     t1 = datetime.fromtimestamp(times[idx1]/1000).strftime('%H:%M')
                     t2 = datetime.fromtimestamp(times[idx2]/1000).strftime('%H:%M')
@@ -112,7 +113,7 @@ def check_divergence(symbol):
             idx2 = pivots_high[i + 1]
             age = last_time - times[idx2]
             
-            if 0 <= age <= max_age_ms:
+            if 0 <= age <= max_age_ms and idx2 >= last_idx - 1:
                 if closes[idx2] > closes[idx1] and rsi[idx2] < rsi[idx1]:
                     t1 = datetime.fromtimestamp(times[idx1]/1000).strftime('%H:%M')
                     t2 = datetime.fromtimestamp(times[idx2]/1000).strftime('%H:%M')
