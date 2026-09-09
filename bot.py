@@ -82,7 +82,7 @@ def check_divergence(symbol):
                 pivots_high.append(i)
         
         last_time = times[-1]
-        max_age_ms = 3 * 5 * 60 * 1000
+        max_age_ms = 2 * 5 * 60 * 1000  # ۲ کندل = ۱۰ دقیقه
         
         # صعودی
         for i in range(len(pivots_low) - 1):
@@ -150,7 +150,7 @@ async def bot_loop():
                 for symbol in symbols:
                     signal = check_divergence(symbol)
                     if signal:
-                        key = f"{symbol}_{signal['type']}"
+                        key = f"{symbol}_{signal['type']}_{signal['p2_time']}"
                         if key not in sent_signals:
                             sent_signals.add(key)
                             
