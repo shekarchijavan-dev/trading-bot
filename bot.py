@@ -53,10 +53,25 @@ def calculate_rsi(closes, period=14):
         rsi_values.append(rsi)
     return rsi_values
 
-def check_divergence(symbol):
+def check_divergence_live(symbol):
     try:
+        # گرفتن قیمت لحظه‌ای
+        url_ticker = "https://api.toobit.com/quote/v1/ticker/bookTicker"
+        response_ticker = requests.get(url_ticker, timeout=5)
+        data_ticker = response_ticker.json()
+        
+        live_price = None
+        for item in data_ticker:
+            if item["s"] == symbol:
+                live_price = float(item["b"])
+                break
+        
+        if live_price is None:
+            return None
+        
+        # گرفتن کندل‌های ۵ دقیقه‌ای
         url = "https://api.toobit.com/quote/v1/klines"
-        params = {"symbol": symbol, "interval": "15m", "limit": 100}
+        params = {"symbol": symbol, "interval": "5m", "limit": 100}
         response = requests.get(url, params=params, timeout=5)
         data = response.json()
         
@@ -65,6 +80,11 @@ def check_divergence(symbol):
         
         closes = [float(c[4]) for c in data]
         times = [int(c[0]) for c in data]
+        
+        # اضافه کردن قیمت لحظه‌ای
+        closes.append(live_price)
+        times.append(int(datetime.now().timestamp() * 1000))
+        
         rsi = calculate_rsi(closes, 14)
         
         min_len = min(len(closes), len(rsi), len(times))
@@ -81,22 +101,20 @@ def check_divergence(symbol):
             if closes[i] == max(closes[i-2:i+3]):
                 pivots_high.append(i)
         
-        last_time = times[-1]
-        max_age_ms = 15 * 60 * 1000  # ۱۵ دقیقه
+        last_idx = len(closes) - 1
         
         # صعودی
         for i in range(len(pivots_low) - 1):
             idx1 = pivots_low[i]
             idx2 = pivots_low[i + 1]
-            age = last_time - times[idx2]
             
-            if 0 <= age <= max_age_ms:
+            if idx2 >= last_idx - 1:
                 if closes[idx2] < closes[idx1] and rsi[idx2] > rsi[idx1]:
                     t1 = datetime.fromtimestamp(times[idx1]/1000).strftime('%H:%M')
                     t2 = datetime.fromtimestamp(times[idx2]/1000).strftime('%H:%M')
                     return {
                         "type": "صعودی 📈",
-                        "price": closes[-1],
+                        "price": live_price,
                         "rsi": rsi[-1],
                         "p1_time": t1,
                         "p1_price": closes[idx1],
@@ -110,15 +128,14 @@ def check_divergence(symbol):
         for i in range(len(pivots_high) - 1):
             idx1 = pivots_high[i]
             idx2 = pivots_high[i + 1]
-            age = last_time - times[idx2]
             
-            if 0 <= age <= max_age_ms:
+            if idx2 >= last_idx - 1:
                 if closes[idx2] > closes[idx1] and rsi[idx2] < rsi[idx1]:
                     t1 = datetime.fromtimestamp(times[idx1]/1000).strftime('%H:%M')
                     t2 = datetime.fromtimestamp(times[idx2]/1000).strftime('%H:%M')
                     return {
                         "type": "نزولی 📉",
-                        "price": closes[-1],
+                        "price": live_price,
                         "rsi": rsi[-1],
                         "p1_time": t1,
                         "p1_price": closes[idx1],
@@ -144,11 +161,11 @@ async def bot_loop():
                 chat_id = updates[-1].message.chat_id
                 
                 if not test_sent:
-                    await bot.send_message(chat_id=chat_id, text="✅ ربات واگرایی ۱۵ دقیقه‌ای فعال شد!")
+                    await bot.send_message(chat_id=chat_id, text="✅ ربات واگرایی لحظه‌ای (۵ دقیقه‌ای) فعال شد!")
                     test_sent = True
                 
                 for symbol in symbols:
-                    signal = check_divergence(symbol)
+                    signal = check_divergence_live(symbol)
                     if signal:
                         key = f"{symbol}_{signal['type']}_{signal['p2_time']}"
                         if key not in sent_signals:
@@ -156,8 +173,8 @@ async def bot_loop():
                             
                             message = f"🚨 **واگرایی {signal['type']}**\n\n"
                             message += f"📊 {symbol}\n"
-                            message += f"💰 قیمت الان: {signal['price']}\n"
-                            message += f"📊 RSI الان: {signal['rsi']:.2f}\n\n"
+                            message += f"💰 قیمت لحظه‌ای: {signal['price']}\n"
+                            message += f"📊 RSI لحظه‌ای: {signal['rsi']:.2f}\n\n"
                             message += f"📍 نقطه ۱: {signal['p1_time']}\n"
                             message += f"   قیمت: {signal['p1_price']:.6f} | RSI: {signal['p1_rsi']:.2f}\n\n"
                             message += f"📍 نقطه ۲: {signal['p2_time']}\n"
@@ -166,11 +183,11 @@ async def bot_loop():
                             await bot.send_message(chat_id=chat_id, text=message)
                             print(f"✅ سیگنال: {symbol}")
             
-            await asyncio.sleep(60)  # هر ۱ دقیقه چک کن
+            await asyncio.sleep(30)  # هر ۳۰ ثانیه
             
         except Exception as e:
             print(f"❌ خطا: {e}")
-            await asyncio.sleep(60)
+            await asyncio.sleep(30)
 
 def run():
     asyncio.run(bot_loop())
