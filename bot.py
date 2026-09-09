@@ -83,9 +83,8 @@ def check_divergence(symbol):
         
         last_time = times[-1]
         last_idx = len(closes) - 1
-        max_age_ms = 1 * 5 * 60 * 1000  # فقط ۵ دقیقه اخیر
+        max_age_ms = 1 * 5 * 60 * 1000
         
-        # صعودی
         for i in range(len(pivots_low) - 1):
             idx1 = pivots_low[i]
             idx2 = pivots_low[i + 1]
@@ -107,7 +106,6 @@ def check_divergence(symbol):
                         "p2_rsi": rsi[idx2]
                     }
         
-        # نزولی
         for i in range(len(pivots_high) - 1):
             idx1 = pivots_high[i]
             idx2 = pivots_high[i + 1]
@@ -167,11 +165,11 @@ async def bot_loop():
                             await bot.send_message(chat_id=chat_id, text=message)
                             print(f"✅ سیگنال: {symbol}")
             
-            await asyncio.sleep(300)
+            await asyncio.sleep(60)  # هر ۱ دقیقه چک کن
             
         except Exception as e:
             print(f"❌ خطا: {e}")
-            await asyncio.sleep(300)
+            await asyncio.sleep(60)
 
 def run():
     asyncio.run(bot_loop())
