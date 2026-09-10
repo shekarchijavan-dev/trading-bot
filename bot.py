@@ -64,10 +64,12 @@ def check_symbol(symbol):
             return None
         
         closes = [float(c[4]) for c in data]
+        times = [int(c[0]) for c in data]
         rsi = calculate_rsi(closes, 14)
         
-        min_len = min(len(closes), len(rsi))
+        min_len = min(len(closes), len(rsi), len(times))
         closes = closes[-min_len:]
+        times = times[-min_len:]
         rsi = rsi[-min_len:]
         
         pivots_low = []
@@ -89,11 +91,19 @@ def check_symbol(symbol):
             if idx2 >= last_idx - 2:
                 if 0 < idx2 - idx1 <= 50:
                     if closes[idx2] < closes[idx1] and rsi[idx2] > rsi[idx1]:
+                        t1 = datetime.fromtimestamp(times[idx1]/1000).strftime('%H:%M')
+                        t2 = datetime.fromtimestamp(times[idx2]/1000).strftime('%H:%M')
                         return {
                             "symbol": symbol,
                             "type": "صعودی 📈",
                             "price": closes[-1],
-                            "rsi": rsi[-1]
+                            "rsi": rsi[-1],
+                            "p1_time": t1,
+                            "p1_price": closes[idx1],
+                            "p1_rsi": rsi[idx1],
+                            "p2_time": t2,
+                            "p2_price": closes[idx2],
+                            "p2_rsi": rsi[idx2]
                         }
         
         # نزولی
@@ -104,11 +114,19 @@ def check_symbol(symbol):
             if idx2 >= last_idx - 2:
                 if 0 < idx2 - idx1 <= 50:
                     if closes[idx2] > closes[idx1] and rsi[idx2] < rsi[idx1]:
+                        t1 = datetime.fromtimestamp(times[idx1]/1000).strftime('%H:%M')
+                        t2 = datetime.fromtimestamp(times[idx2]/1000).strftime('%H:%M')
                         return {
                             "symbol": symbol,
                             "type": "نزولی 📉",
                             "price": closes[-1],
-                            "rsi": rsi[-1]
+                            "rsi": rsi[-1],
+                            "p1_time": t1,
+                            "p1_price": closes[idx1],
+                            "p1_rsi": rsi[idx1],
+                            "p2_time": t2,
+                            "p2_price": closes[idx2],
+                            "p2_rsi": rsi[idx2]
                         }
     except:
         pass
@@ -135,15 +153,19 @@ async def bot_loop():
                 for symbol in symbols:
                     signal = check_symbol(symbol)
                     if signal:
-                        key = f"{symbol}_{signal['type']}"
+                        key = f"{symbol}_{signal['type']}_{signal['p2_time']}"
                         if key not in sent_keys:
                             sent_keys.add(key)
                             signals_found += 1
                             
                             message = f"🚨 **واگرایی {signal['type']}**\n\n"
                             message += f"📊 {signal['symbol']}\n"
-                            message += f"💰 قیمت: {signal['price']}\n"
-                            message += f"📊 RSI: {signal['rsi']:.2f}\n"
+                            message += f"💰 قیمت الان: {signal['price']}\n"
+                            message += f"📊 RSI الان: {signal['rsi']:.2f}\n\n"
+                            message += f"📍 نقطه ۱: {signal['p1_time']}\n"
+                            message += f"   قیمت: {signal['p1_price']:.6f} | RSI: {signal['p1_rsi']:.2f}\n\n"
+                            message += f"📍 نقطه ۲: {signal['p2_time']}\n"
+                            message += f"   قیمت: {signal['p2_price']:.6f} | RSI: {signal['p2_rsi']:.2f}\n"
                             
                             await bot.send_message(chat_id=chat_id, text=message)
                             print(f"✅ سیگنال: {signal['symbol']}")
