@@ -53,10 +53,10 @@ def calculate_rsi(closes, period=14):
         rsi_values.append(rsi)
     return rsi_values
 
-def check_divergence(symbol):
+def check_symbol(symbol):
     try:
         url = "https://api.toobit.com/quote/v1/klines"
-        params = {"symbol": symbol, "interval": "5m", "limit": 50}
+        params = {"symbol": symbol, "interval": "5m", "limit": 100}
         response = requests.get(url, params=params, timeout=5)
         data = response.json()
         
@@ -64,13 +64,10 @@ def check_divergence(symbol):
             return None
         
         closes = [float(c[4]) for c in data]
-        times = [int(c[0]) for c in data]
-        
         rsi = calculate_rsi(closes, 14)
         
-        min_len = min(len(closes), len(rsi), len(times))
+        min_len = min(len(closes), len(rsi))
         closes = closes[-min_len:]
-        times = times[-min_len:]
         rsi = rsi[-min_len:]
         
         pivots_low = []
@@ -84,47 +81,35 @@ def check_divergence(symbol):
         
         last_idx = len(closes) - 1
         
-        # صعودی - نقطه ۲ = کندل آخر یا یکی مانده به آخر
+        # صعودی
         for i in range(len(pivots_low) - 1):
             idx1 = pivots_low[i]
             idx2 = pivots_low[i + 1]
             
-            if idx2 >= last_idx - 1:
-                if closes[idx2] < closes[idx1] and rsi[idx2] > rsi[idx1]:
-                    t1 = datetime.fromtimestamp(times[idx1]/1000).strftime('%H:%M')
-                    t2 = datetime.fromtimestamp(times[idx2]/1000).strftime('%H:%M')
-                    return {
-                        "type": "صعودی 📈",
-                        "price": closes[-1],
-                        "rsi": rsi[-1],
-                        "p1_time": t1,
-                        "p1_price": closes[idx1],
-                        "p1_rsi": rsi[idx1],
-                        "p2_time": t2,
-                        "p2_price": closes[idx2],
-                        "p2_rsi": rsi[idx2]
-                    }
+            if idx2 >= last_idx - 2:
+                if 0 < idx2 - idx1 <= 50:
+                    if closes[idx2] < closes[idx1] and rsi[idx2] > rsi[idx1]:
+                        return {
+                            "symbol": symbol,
+                            "type": "صعودی 📈",
+                            "price": closes[-1],
+                            "rsi": rsi[-1]
+                        }
         
         # نزولی
         for i in range(len(pivots_high) - 1):
             idx1 = pivots_high[i]
             idx2 = pivots_high[i + 1]
             
-            if idx2 >= last_idx - 1:
-                if closes[idx2] > closes[idx1] and rsi[idx2] < rsi[idx1]:
-                    t1 = datetime.fromtimestamp(times[idx1]/1000).strftime('%H:%M')
-                    t2 = datetime.fromtimestamp(times[idx2]/1000).strftime('%H:%M')
-                    return {
-                        "type": "نزولی 📉",
-                        "price": closes[-1],
-                        "rsi": rsi[-1],
-                        "p1_time": t1,
-                        "p1_price": closes[idx1],
-                        "p1_rsi": rsi[idx1],
-                        "p2_time": t2,
-                        "p2_price": closes[idx2],
-                        "p2_rsi": rsi[idx2]
-                    }
+            if idx2 >= last_idx - 2:
+                if 0 < idx2 - idx1 <= 50:
+                    if closes[idx2] > closes[idx1] and rsi[idx2] < rsi[idx1]:
+                        return {
+                            "symbol": symbol,
+                            "type": "نزولی 📉",
+                            "price": closes[-1],
+                            "rsi": rsi[-1]
+                        }
     except:
         pass
     return None
@@ -132,9 +117,8 @@ def check_divergence(symbol):
 async def bot_loop():
     bot = Bot(TOKEN)
     symbols = get_all_symbols()[:100]
-    sent_signals = set()
+    sent_keys = set()
     test_sent = False
-    check_count = 0
     
     while True:
         try:
@@ -143,32 +127,28 @@ async def bot_loop():
                 chat_id = updates[-1].message.chat_id
                 
                 if not test_sent:
-                    await bot.send_message(chat_id=chat_id, text="✅ ربات شروع به کار کرد!")
+                    await bot.send_message(chat_id=chat_id, text="✅ ربات واگرایی فعال شد!")
                     test_sent = True
                 
-                signals_found = []
+                signals_found = 0
                 
                 for symbol in symbols:
-                    signal = check_divergence(symbol)
+                    signal = check_symbol(symbol)
                     if signal:
-                        key = f"{symbol}_{signal['type']}_{signal['p2_time']}"
-                        if key not in sent_signals:
-                            sent_signals.add(key)
-                            signals_found.append(signal)
+                        key = f"{symbol}_{signal['type']}"
+                        if key not in sent_keys:
+                            sent_keys.add(key)
+                            signals_found += 1
                             
                             message = f"🚨 **واگرایی {signal['type']}**\n\n"
-                            message += f"📊 {symbol}\n"
+                            message += f"📊 {signal['symbol']}\n"
                             message += f"💰 قیمت: {signal['price']}\n"
-                            message += f"📊 RSI: {signal['rsi']:.2f}\n\n"
-                            message += f"📍 نقطه ۱: {signal['p1_time']} | قیمت {signal['p1_price']:.6f} | RSI {signal['p1_rsi']:.2f}\n"
-                            message += f"📍 نقطه ۲: {signal['p2_time']} | قیمت {signal['p2_price']:.6f} | RSI {signal['p2_rsi']:.2f}\n"
+                            message += f"📊 RSI: {signal['rsi']:.2f}\n"
                             
                             await bot.send_message(chat_id=chat_id, text=message)
-                            print(f"✅ سیگنال: {symbol}")
+                            print(f"✅ سیگنال: {signal['symbol']}")
                 
-                check_count += 1
-                current_time = datetime.now().strftime('%H:%M')
-                print(f"⏰ دور {check_count}: {len(signals_found)} سیگنال - {current_time}")
+                print(f"⏰ چک شد | {signals_found} سیگنال | {datetime.now().strftime('%H:%M:%S')}")
                 
             await asyncio.sleep(60)
             
