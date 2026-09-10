@@ -1,57 +1,91 @@
-import requests
-import asyncio
-from telegram import Bot
-from flask import Flask
-import threading
-from datetime import datetime
 import os
+import requests
 import time
+from datetime import datetime
 
-app = Flask(__name__)
-
-# =========================================================
+# =========================
 # تنظیمات
-# =========================================================
+# =========================
 
-TOKEN = os.getenv("TOKEN", "توکن_فعلی_خودت")
+BASE_URL = "https://api.toobit.com"
 
+MAX_SYMBOLS = 100
 TIMEFRAME = "5m"
 CANDLE_LIMIT = 100
-MAX_SYMBOLS = 100
-
-# هر 60 ثانیه بررسی می‌کند
 SCAN_INTERVAL = 60
 
-# تعداد کندل برای تشخیص Pivot
-PIVOT_LEFT = 2
-PIVOT_RIGHT = 2
+RSI_PERIOD = 14
 
-# فاصله حداکثری دو نقطه واگرایی
+# فقط واگرایی‌های 1 ساعت اخیر
+MAX_SIGNAL_AGE = 12
+
+# فاصله نقطه 1 و 2
 MAX_PIVOT_DISTANCE = 50
 
-# فقط Pivot خیلی جدید قابل هشدار است
-MAX_SIGNAL_AGE = 3
+
+# =========================
+# تلگرام
+# =========================
+
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+CHAT_ID = os.getenv("CHAT_ID", "6822304373")
 
 
-# =========================================================
-# Flask
-# =========================================================
-
-@app.route("/")
-def home():
-    return "Trading Alert Bot is running!"
-
-
-# =========================================================
-# دریافت ارزها
-# =========================================================
-
-def get_all_symbols():
-
-    url = "https://api.toobit.com/quote/v1/ticker/bookTicker"
+def send_telegram(message):
 
     try:
-        response = requests.get(url, timeout=10)
+
+        if not TELEGRAM_TOKEN:
+            print("❌ TELEGRAM_TOKEN در Render تنظیم نشده")
+            return False
+
+        url = (
+            "https://api.telegram.org/bot"
+            + TELEGRAM_TOKEN
+            + "/sendMessage"
+        )
+
+        response = requests.post(
+            url,
+            data={
+                "chat_id": CHAT_ID,
+                "text": message
+            },
+            timeout=10
+        )
+
+        if response.status_code == 200:
+
+            print("📨 تلگرام: پیام ارسال شد")
+            return True
+
+        else:
+
+            print("❌ خطای تلگرام:")
+            print(response.text)
+            return False
+
+    except Exception as e:
+
+        print("❌ خطای تلگرام:", e)
+        return False
+
+
+# =========================
+# دریافت ارزها
+# =========================
+
+def get_symbols():
+
+    try:
+
+        url = BASE_URL + "/quote/v1/ticker/bookTicker"
+
+        response = requests.get(
+            url,
+            timeout=10
+        )
+
         response.raise_for_status()
 
         data = response.json()
@@ -62,28 +96,33 @@ def get_all_symbols():
 
             symbol = item.get("s", "")
 
-            if symbol.endswith("USDT"):
+            if (
+                symbol.endswith("USDT")
+                and symbol.isalnum()
+                and len(symbol) <= 20
+            ):
+
                 symbols.append(symbol)
 
-        # حذف موارد تکراری
         symbols = list(dict.fromkeys(symbols))
 
         return symbols[:MAX_SYMBOLS]
 
     except Exception as e:
 
-        print(f"❌ Error getting symbols: {e}")
+        print("❌ خطا در دریافت ارزها:", e)
 
         return []
 
 
-# =========================================================
-# RSI
-# =========================================================
+# =========================
+# محاسبه RSI
+# =========================
 
 def calculate_rsi(closes, period=14):
 
     if len(closes) < period + 1:
+
         return []
 
     gains = []
@@ -106,6 +145,8 @@ def calculate_rsi(closes, period=14):
     avg_gain = sum(gains[:period]) / period
     avg_loss = sum(losses[:period]) / period
 
+    rsi_values = []
+
     if avg_loss == 0:
 
         rsi = 100
@@ -115,16 +156,18 @@ def calculate_rsi(closes, period=14):
         rs = avg_gain / avg_loss
         rsi = 100 - (100 / (1 + rs))
 
-    rsi_values = [rsi]
+    rsi_values.append(rsi)
 
     for i in range(period, len(gains)):
 
         avg_gain = (
-            (avg_gain * (period - 1)) + gains[i]
+            (avg_gain * (period - 1))
+            + gains[i]
         ) / period
 
         avg_loss = (
-            (avg_loss * (period - 1)) + losses[i]
+            (avg_loss * (period - 1))
+            + losses[i]
         ) / period
 
         if avg_loss == 0:
@@ -141,42 +184,43 @@ def calculate_rsi(closes, period=14):
     return rsi_values
 
 
-# =========================================================
-# تشخیص واگرایی
-# =========================================================
+# =========================
+# بررسی یک ارز
+# =========================
 
 def check_symbol(symbol):
 
     try:
 
-        url = "https://api.toobit.com/quote/v1/klines"
+        url = BASE_URL + "/quote/v1/klines"
 
         params = {
             "symbol": symbol,
             "interval": TIMEFRAME,
-            "limit": CANDLE_LIMIT
+            "limit": CANDLE_LIMIT + 1
         }
 
         response = requests.get(
             url,
             params=params,
-            timeout=10
+            timeout=8
         )
-
-        response.raise_for_status()
 
         data = response.json()
 
+        if not isinstance(data, list):
+            return []
+
         if len(data) < 40:
-            return None
+            return []
 
-        # -------------------------------------------------
-        # مهم:
-        # آخرین کندل ممکن است هنوز در حال تشکیل باشد.
-        # آن را حذف می‌کنیم.
-        # -------------------------------------------------
 
+        # حذف کندل در حال تشکیل
         data = data[:-1]
+
+        if len(data) < 30:
+            return []
+
 
         closes = [
             float(candle[4])
@@ -188,464 +232,412 @@ def check_symbol(symbol):
             for candle in data
         ]
 
-        if len(closes) < 30:
-            return None
 
-        # -------------------------------------------------
+        # =========================
         # RSI
-        # -------------------------------------------------
+        # =========================
 
-        rsi = calculate_rsi(closes, 14)
+        rsi = calculate_rsi(
+            closes,
+            RSI_PERIOD
+        )
 
         if not rsi:
-            return None
+            return []
 
-        rsi_offset = len(closes) - len(rsi)
 
-        def get_rsi(index):
+        # هماهنگ کردن RSI با کندل‌ها
 
-            rsi_index = index - rsi_offset
+        rsi_full = [None] * RSI_PERIOD
+        rsi_full.extend(rsi)
 
-            if rsi_index < 0:
-                return None
+        if len(rsi_full) > len(closes):
 
-            if rsi_index >= len(rsi):
-                return None
+            rsi_full = rsi_full[-len(closes):]
 
-            return rsi[rsi_index]
 
-        # -------------------------------------------------
-        # Pivot ها
-        # -------------------------------------------------
-
-        pivots_low = []
-        pivots_high = []
-
-        for i in range(
-            PIVOT_LEFT,
-            len(closes) - PIVOT_RIGHT
-        ):
-
-            left = closes[
-                i - PIVOT_LEFT:i
-            ]
-
-            right = closes[
-                i + 1:i + PIVOT_RIGHT + 1
-            ]
-
-            # Pivot Low
-            if (
-                closes[i] < min(left)
-                and closes[i] < min(right)
-            ):
-
-                pivots_low.append(i)
-
-            # Pivot High
-            if (
-                closes[i] > max(left)
-                and closes[i] > max(right)
-            ):
-
-                pivots_high.append(i)
+        # =========================
+        # آخرین کندل بسته‌شده
+        # =========================
 
         last_idx = len(closes) - 1
+        idx2 = last_idx
 
-        # =================================================
-        # واگرایی صعودی
-        # =================================================
+        signals = []
 
-        if len(pivots_low) >= 2:
 
-            idx1 = pivots_low[-2]
-            idx2 = pivots_low[-1]
+        # =========================
+        # Bullish
+        # =========================
 
-            age = last_idx - idx2
-            distance = idx2 - idx1
+        if (
+            idx2 >= 2
+            and
+            closes[idx2] <= closes[idx2 - 1]
+            and
+            closes[idx2] <= closes[idx2 - 2]
+        ):
 
-            rsi1 = get_rsi(idx1)
-            rsi2 = get_rsi(idx2)
+            start = max(
+                RSI_PERIOD,
+                idx2 - MAX_PIVOT_DISTANCE
+            )
 
-            if (
-                rsi1 is not None
-                and rsi2 is not None
-                and age <= MAX_SIGNAL_AGE
-                and 0 < distance <= MAX_PIVOT_DISTANCE
-            ):
+            end = idx2 - 3
 
-                price1 = closes[idx1]
-                price2 = closes[idx2]
+            if end >= start:
 
-                # قیمت کف جدیدتر پایین‌تر
-                # RSI کف جدیدتر بالاتر
-                if (
-                    price2 < price1
-                    and rsi2 > rsi1
-                ):
+                best_idx1 = None
 
-                    return {
-                        "symbol": symbol,
-                        "type": "صعودی 📈",
-                        "signal_time": times[idx2],
-                        "price": closes[-1],
-                        "rsi": rsi2,
-                        "p1_time": datetime.fromtimestamp(
-                            times[idx1] / 1000
-                        ).strftime("%H:%M"),
-                        "p1_price": price1,
-                        "p1_rsi": rsi1,
-                        "p2_time": datetime.fromtimestamp(
-                            times[idx2] / 1000
-                        ).strftime("%H:%M"),
-                        "p2_price": price2,
-                        "p2_rsi": rsi2
-                    }
+                for i in range(start, end + 1):
 
-        # =================================================
-        # واگرایی نزولی
-        # =================================================
+                    if (
+                        closes[i] < closes[i - 1]
+                        and
+                        closes[i] <= closes[i + 1]
+                    ):
 
-        if len(pivots_high) >= 2:
+                        if best_idx1 is None:
 
-            idx1 = pivots_high[-2]
-            idx2 = pivots_high[-1]
+                            best_idx1 = i
 
-            age = last_idx - idx2
-            distance = idx2 - idx1
+                        elif closes[i] < closes[best_idx1]:
 
-            rsi1 = get_rsi(idx1)
-            rsi2 = get_rsi(idx2)
+                            best_idx1 = i
 
-            if (
-                rsi1 is not None
-                and rsi2 is not None
-                and age <= MAX_SIGNAL_AGE
-                and 0 < distance <= MAX_PIVOT_DISTANCE
-            ):
 
-                price1 = closes[idx1]
-                price2 = closes[idx2]
+                if best_idx1 is not None:
 
-                # قیمت سقف جدیدتر بالاتر
-                # RSI سقف جدیدتر پایین‌تر
-                if (
-                    price2 > price1
-                    and rsi2 < rsi1
-                ):
+                    idx1 = best_idx1
 
-                    return {
-                        "symbol": symbol,
-                        "type": "نزولی 📉",
-                        "signal_time": times[idx2],
-                        "price": closes[-1],
-                        "rsi": rsi2,
-                        "p1_time": datetime.fromtimestamp(
-                            times[idx1] / 1000
-                        ).strftime("%H:%M"),
-                        "p1_price": price1,
-                        "p1_rsi": rsi1,
-                        "p2_time": datetime.fromtimestamp(
-                            times[idx2] / 1000
-                        ).strftime("%H:%M"),
-                        "p2_price": price2,
-                        "p2_rsi": rsi2
-                    }
+                    if (
+                        closes[idx2] < closes[idx1]
+                        and
+                        rsi_full[idx2] is not None
+                        and
+                        rsi_full[idx1] is not None
+                        and
+                        rsi_full[idx2] > rsi_full[idx1]
+                    ):
+
+                        signals.append({
+
+                            "type": "Bullish",
+
+                            "time": times[idx2],
+
+                            "price": closes[idx2],
+
+                            "rsi": rsi_full[idx2],
+
+                            "p1_time": times[idx1],
+
+                            "p1_price": closes[idx1],
+
+                            "p1_rsi": rsi_full[idx1],
+
+                            "p2_time": times[idx2],
+
+                            "p2_price": closes[idx2],
+
+                            "p2_rsi": rsi_full[idx2]
+
+                        })
+
+
+        # =========================
+        # Bearish
+        # =========================
+
+        if (
+            idx2 >= 2
+            and
+            closes[idx2] >= closes[idx2 - 1]
+            and
+            closes[idx2] >= closes[idx2 - 2]
+        ):
+
+            start = max(
+                RSI_PERIOD,
+                idx2 - MAX_PIVOT_DISTANCE
+            )
+
+            end = idx2 - 3
+
+            if end >= start:
+
+                best_idx1 = None
+
+                for i in range(start, end + 1):
+
+                    if (
+                        closes[i] > closes[i - 1]
+                        and
+                        closes[i] >= closes[i + 1]
+                    ):
+
+                        if best_idx1 is None:
+
+                            best_idx1 = i
+
+                        elif closes[i] > closes[best_idx1]:
+
+                            best_idx1 = i
+
+
+                if best_idx1 is not None:
+
+                    idx1 = best_idx1
+
+                    if (
+                        closes[idx2] > closes[idx1]
+                        and
+                        rsi_full[idx2] is not None
+                        and
+                        rsi_full[idx1] is not None
+                        and
+                        rsi_full[idx2] < rsi_full[idx1]
+                    ):
+
+                        signals.append({
+
+                            "type": "Bearish",
+
+                            "time": times[idx2],
+
+                            "price": closes[idx2],
+
+                            "rsi": rsi_full[idx2],
+
+                            "p1_time": times[idx1],
+
+                            "p1_price": closes[idx1],
+
+                            "p1_rsi": rsi_full[idx1],
+
+                            "p2_time": times[idx2],
+
+                            "p2_price": closes[idx2],
+
+                            "p2_rsi": rsi_full[idx2]
+
+                        })
+
+
+        return signals
+
+
+    except Exception:
+
+        return []
+
+
+# =========================
+# اسکن
+# =========================
+
+def scan():
+
+    symbols = get_symbols()
+
+    if not symbols:
+
+        print("❌ هیچ ارزی دریافت نشد")
+        return
+
+
+    print()
+    print("========================================")
+    print("🔎 شروع اسکن")
+    print("📊 تعداد ارز:", len(symbols))
+    print("⏱ تایم‌فریم:", TIMEFRAME)
+    print("🚫 کندل در حال تشکیل بررسی نمی‌شود")
+    print("🕐 فقط آخرین کندل بسته‌شده")
+    print("========================================")
+
+
+    found = 0
+
+
+    for number, symbol in enumerate(
+        symbols,
+        start=1
+    ):
+
+        signals = check_symbol(symbol)
+
+
+        for signal in signals:
+
+            key = (
+                symbol
+                + "_"
+                + signal["type"]
+                + "_"
+                + str(signal["time"])
+            )
+
+
+            if key in sent_signals:
+
+                continue
+
+
+            sent_signals.add(key)
+
+            found += 1
+
+
+            p1_time = datetime.fromtimestamp(
+                signal["p1_time"] / 1000
+            ).strftime("%H:%M")
+
+
+            p2_time = datetime.fromtimestamp(
+                signal["p2_time"] / 1000
+            ).strftime("%H:%M")
+
+
+            if signal["type"] == "Bullish":
+
+                emoji = "🟢"
+                name = "Bullish Divergence"
+
+            else:
+
+                emoji = "🔴"
+                name = "Bearish Divergence"
+
+
+            message = (
+
+                "🚨 واگرایی جدید\n\n"
+
+                + emoji
+                + " "
+                + name
+                + "\n\n"
+
+                + "💰 ارز: "
+                + symbol
+                + "\n"
+
+                + "⏱ تایم‌فریم: 5m\n"
+
+                + "🕐 نقطه ۱: "
+                + p1_time
+                + "\n"
+
+                + "💵 قیمت نقطه ۱: "
+                + str(signal["p1_price"])
+                + "\n"
+
+                + "📊 RSI نقطه ۱: "
+                + f"{signal['p1_rsi']:.2f}"
+                + "\n\n"
+
+                + "🕐 نقطه ۲: "
+                + p2_time
+                + "\n"
+
+                + "💵 قیمت نقطه ۲: "
+                + str(signal["p2_price"])
+                + "\n"
+
+                + "📊 RSI نقطه ۲: "
+                + f"{signal['p2_rsi']:.2f}"
+                + "\n\n"
+
+                + "⚠️ فقط هشدار\n"
+                + "❌ بدون معامله"
+            )
+
+
+            print()
+            print(message)
+
+            send_telegram(message)
+
+
+        if number % 10 == 0:
+
+            print(
+                "✅ "
+                + str(number)
+                + "/"
+                + str(len(symbols))
+                + " ارز بررسی شد"
+            )
+
+
+    print()
+    print("========================================")
+
+    print(
+        "🏁 اسکن تمام شد | واگرایی جدید:",
+        found
+    )
+
+    print("========================================")
+
+
+# =========================
+# شروع
+# =========================
+
+sent_signals = set()
+
+
+print("========================================")
+print("🤖 TOOBIT DIVERGENCE SCANNER")
+print("========================================")
+print("📊 100 ارز")
+print("⏱ تایم‌فریم: 5 دقیقه")
+print("🚫 کندل در حال تشکیل بررسی نمی‌شود")
+print("🕐 فقط آخرین کندل بسته‌شده")
+print("🔁 اسکن مداوم")
+print("📨 Telegram: ON")
+print("========================================")
+
+
+# تست تلگرام
+
+if send_telegram(
+    "✅ ربات واگرایی فعال شد\n"
+    "📊 100 ارز\n"
+    "⏱ تایم‌فریم 5m\n"
+    "🚫 فقط کندل‌های بسته‌شده\n"
+    "🚨 بررسی واگرایی جدید"
+):
+
+    print("✅ اتصال تلگرام موفق بود")
+
+else:
+
+    print("❌ اتصال تلگرام ناموفق است")
+
+
+# =========================
+# حلقه اصلی
+# =========================
+
+while True:
+
+    try:
+
+        scan()
 
     except Exception as e:
 
-        print(
-            f"❌ {symbol} error: {e}"
-        )
+        print("❌ خطای اصلی:", e)
 
-    return None
 
-
-# =========================================================
-# ساخت پیام تلگرام
-# =========================================================
-
-def build_message(signal):
-
-    message = ""
-
-    message += "🚨 واگرایی جدید پیدا شد!\n\n"
-
-    message += f"📊 ارز: {signal['symbol']}\n"
-    message += f"📈 نوع: {signal['type']}\n\n"
-
-    message += (
-        f"💰 قیمت فعلی: "
-        f"{signal['price']}\n"
-    )
-
-    message += (
-        f"📊 RSI: "
-        f"{signal['rsi']:.2f}\n\n"
-    )
-
-    message += (
-        f"📍 نقطه ۱: "
-        f"{signal['p1_time']}\n"
-    )
-
-    message += (
-        f"قیمت: "
-        f"{signal['p1_price']:.8f}\n"
-    )
-
-    message += (
-        f"RSI: "
-        f"{signal['p1_rsi']:.2f}\n\n"
-    )
-
-    message += (
-        f"📍 نقطه ۲: "
-        f"{signal['p2_time']}\n"
-    )
-
-    message += (
-        f"قیمت: "
-        f"{signal['p2_price']:.8f}\n"
-    )
-
-    message += (
-        f"RSI: "
-        f"{signal['p2_rsi']:.2f}\n\n"
-    )
-
-    message += "⏱ تایم‌فریم: 5 دقیقه\n"
-    message += "⚠️ فقط هشدار — بدون معامله"
-
-    return message
-
-
-# =========================================================
-# ربات تلگرام
-# =========================================================
-
-async def bot_loop():
-
-    if not TOKEN:
-
-        print("❌ TOKEN پیدا نشد.")
-
-        return
-
-    bot = Bot(TOKEN)
-
-    sent_signals = set()
-
-    chat_id = None
-
-    startup_sent = False
-
-    print("")
-    print("================================")
-    print("🤖 Trading Alert Bot Started")
-    print("⏱ Timeframe: 5m")
-    print("📊 Symbols: 100")
-    print("================================")
-    print("")
-
-    while True:
-
-        try:
-
-            # ---------------------------------------------
-            # دریافت آخرین پیام‌های تلگرام
-            # ---------------------------------------------
-
-            updates = await bot.get_updates(
-                timeout=5
-            )
-
-            if updates:
-
-                for update in updates:
-
-                    if update.message:
-
-                        chat_id = update.message.chat_id
-
-                        # اگر /start فرستاده شد
-                        if (
-                            update.message.text
-                            == "/start"
-                        ):
-
-                            await bot.send_message(
-                                chat_id=chat_id,
-                                text=(
-                                    "✅ ربات فعال است!\n\n"
-                                    "واگرایی‌های تازه "
-                                    "تایم‌فریم 5 دقیقه "
-                                    "را بررسی می‌کنم."
-                                )
-                            )
-
-            # ---------------------------------------------
-            # پیام اجرای موفق
-            # ---------------------------------------------
-
-            if chat_id and not startup_sent:
-
-                await bot.send_message(
-                    chat_id=chat_id,
-                    text=(
-                        "🚀 کد با موفقیت اجرا شد! ✅\n\n"
-                        "🤖 ربات هشدار واگرایی فعال است.\n"
-                        "⏱ تایم‌فریم: 5 دقیقه\n"
-                        "📊 در حال اسکن 100 ارز\n\n"
-                        "⚠️ فقط هشدار ارسال می‌شود؛ "
-                        "هیچ معامله‌ای انجام نمی‌شود."
-                    )
-                )
-
-                startup_sent = True
-
-                print(
-                    "✅ Startup message sent to Telegram"
-                )
-
-            # ---------------------------------------------
-            # اگر هنوز Chat ID نداریم
-            # ---------------------------------------------
-
-            if not chat_id:
-
-                print(
-                    "⏳ Waiting for Telegram /start..."
-                )
-
-                await asyncio.sleep(5)
-
-                continue
-
-            # ---------------------------------------------
-            # دریافت ارزها
-            # ---------------------------------------------
-
-            symbols = get_all_symbols()
-
-            if not symbols:
-
-                print(
-                    "⚠️ No symbols received."
-                )
-
-                await asyncio.sleep(
-                    SCAN_INTERVAL
-                )
-
-                continue
-
-            print(
-                f"🔎 Scanning {len(symbols)} symbols..."
-            )
-
-            signals_found = 0
-
-            # ---------------------------------------------
-            # اسکن ارزها
-            # ---------------------------------------------
-
-            for symbol in symbols:
-
-                signal = check_symbol(symbol)
-
-                if signal:
-
-                    signal_key = (
-                        f"{symbol}_"
-                        f"{signal['type']}_"
-                        f"{signal['signal_time']}"
-                    )
-
-                    # جلوگیری از ارسال دوباره
-                    if signal_key not in sent_signals:
-
-                        sent_signals.add(
-                            signal_key
-                        )
-
-                        message = build_message(
-                            signal
-                        )
-
-                        await bot.send_message(
-                            chat_id=chat_id,
-                            text=message
-                        )
-
-                        signals_found += 1
-
-                        print(
-                            f"🚨 NEW SIGNAL | "
-                            f"{symbol} | "
-                            f"{signal['type']}"
-                        )
-
-                # کمی فاصله برای جلوگیری از فشار
-                await asyncio.sleep(0.05)
-
-            print(
-                f"⏰ Scan finished | "
-                f"New signals: {signals_found} | "
-                f"{datetime.now().strftime('%H:%M:%S')}"
-            )
-
-            print("")
-
-            # ---------------------------------------------
-            # انتظار تا اسکن بعدی
-            # ---------------------------------------------
-
-            await asyncio.sleep(
-                SCAN_INTERVAL
-            )
-
-        except Exception as e:
-
-            print(
-                f"❌ Bot loop error: {e}"
-            )
-
-            await asyncio.sleep(30)
-
-
-# =========================================================
-# اجرای Bot
-# =========================================================
-
-def run_bot():
-
-    asyncio.run(
-        bot_loop()
-    )
-
-
-threading.Thread(
-    target=run_bot,
-    daemon=True
-).start()
-
-
-# =========================================================
-# اجرای Flask برای Render
-# =========================================================
-
-if __name__ == "__main__":
+    print()
 
     print(
-        "🌐 Flask server starting..."
+        "⏳ اسکن بعدی تا",
+        SCAN_INTERVAL,
+        "ثانیه دیگر..."
     )
 
-    port = int(
-        os.getenv("PORT", 10000)
-    )
-
-    app.run(
-        host="0.0.0.0",
-        port=port
-    )
+    time.sleep(SCAN_INTERVAL)
