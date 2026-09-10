@@ -1,43 +1,41 @@
 import requests
 import asyncio
-import threading
-import time
-
 from telegram import Bot
 from flask import Flask
+import threading
 from datetime import datetime
+import os
+import time
 
+app = Flask(__name__)
 
 # =========================================================
-# SETTINGS
+# تنظیمات
 # =========================================================
 
-TOKEN = "توکن_جدید_ربات_اینجا"
+TOKEN = os.getenv("TOKEN", "توکن_فعلی_خودت")
 
 TIMEFRAME = "5m"
 CANDLE_LIMIT = 100
 MAX_SYMBOLS = 100
 
+# هر 60 ثانیه بررسی می‌کند
 SCAN_INTERVAL = 60
 
-# Pivot با 2 کندل قبل و 2 کندل بعد تأیید می‌شود
+# تعداد کندل برای تشخیص Pivot
 PIVOT_LEFT = 2
 PIVOT_RIGHT = 2
 
-# فقط اگر Pivot دوم حداکثر 3 کندل قبل باشد
-# اجازه هشدار می‌دهیم.
-MAX_PIVOT_AGE = 3
-
-# فاصله حداکثر بین دو Pivot
+# فاصله حداکثری دو نقطه واگرایی
 MAX_PIVOT_DISTANCE = 50
 
+# فقط Pivot خیلی جدید قابل هشدار است
+MAX_SIGNAL_AGE = 3
+
 
 # =========================================================
-# FLASK
+# Flask
 # =========================================================
-
-app = Flask(__name__)
-
 
 @app.route("/")
 def home():
@@ -45,25 +43,15 @@ def home():
 
 
 # =========================================================
-# TOOBIT
+# دریافت ارزها
 # =========================================================
 
-TOOBIT_TICKER_URL = (
-    "https://api.toobit.com/quote/v1/ticker/bookTicker"
-)
-
-TOOBIT_KLINES_URL = (
-    "https://api.toobit.com/quote/v1/klines"
-)
-
-
 def get_all_symbols():
-    try:
-        response = requests.get(
-            TOOBIT_TICKER_URL,
-            timeout=10
-        )
 
+    url = "https://api.toobit.com/quote/v1/ticker/bookTicker"
+
+    try:
+        response = requests.get(url, timeout=10)
         response.raise_for_status()
 
         data = response.json()
@@ -77,11 +65,14 @@ def get_all_symbols():
             if symbol.endswith("USDT"):
                 symbols.append(symbol)
 
+        # حذف موارد تکراری
+        symbols = list(dict.fromkeys(symbols))
+
         return symbols[:MAX_SYMBOLS]
 
     except Exception as e:
 
-        print(f"❌ خطا در دریافت نمادها: {e}")
+        print(f"❌ Error getting symbols: {e}")
 
         return []
 
@@ -112,8 +103,6 @@ def calculate_rsi(closes, period=14):
             gains.append(0)
             losses.append(abs(change))
 
-    rsi_values = []
-
     avg_gain = sum(gains[:period]) / period
     avg_loss = sum(losses[:period]) / period
 
@@ -126,7 +115,7 @@ def calculate_rsi(closes, period=14):
         rs = avg_gain / avg_loss
         rsi = 100 - (100 / (1 + rs))
 
-    rsi_values.append(rsi)
+    rsi_values = [rsi]
 
     for i in range(period, len(gains)):
 
@@ -153,12 +142,14 @@ def calculate_rsi(closes, period=14):
 
 
 # =========================================================
-# CHECK SYMBOL
+# تشخیص واگرایی
 # =========================================================
 
 def check_symbol(symbol):
 
     try:
+
+        url = "https://api.toobit.com/quote/v1/klines"
 
         params = {
             "symbol": symbol,
@@ -167,7 +158,7 @@ def check_symbol(symbol):
         }
 
         response = requests.get(
-            TOOBIT_KLINES_URL,
+            url,
             params=params,
             timeout=10
         )
@@ -176,119 +167,93 @@ def check_symbol(symbol):
 
         data = response.json()
 
-        if not isinstance(data, list):
-            return None
-
         if len(data) < 40:
             return None
 
-
-        # =================================================
-        # حذف کندل در حال تشکیل
-        # =================================================
+        # -------------------------------------------------
+        # مهم:
+        # آخرین کندل ممکن است هنوز در حال تشکیل باشد.
+        # آن را حذف می‌کنیم.
+        # -------------------------------------------------
 
         data = data[:-1]
 
+        closes = [
+            float(candle[4])
+            for candle in data
+        ]
 
-        # =================================================
-        # PRICE DATA
-        # =================================================
+        times = [
+            int(candle[0])
+            for candle in data
+        ]
 
-        opens = [float(x[1]) for x in data]
-        highs = [float(x[2]) for x in data]
-        lows = [float(x[3]) for x in data]
-        closes = [float(x[4]) for x in data]
+        if len(closes) < 30:
+            return None
 
-        times = [int(x[0]) for x in data]
-
-
-        # =================================================
+        # -------------------------------------------------
         # RSI
-        # =================================================
+        # -------------------------------------------------
 
-        rsi = calculate_rsi(
-            closes,
-            14
-        )
+        rsi = calculate_rsi(closes, 14)
 
         if not rsi:
             return None
 
-
-        # RSI از کندل شماره 14 شروع می‌شود
         rsi_offset = len(closes) - len(rsi)
 
+        def get_rsi(index):
 
-        # =================================================
-        # PIVOTS
-        # =================================================
+            rsi_index = index - rsi_offset
+
+            if rsi_index < 0:
+                return None
+
+            if rsi_index >= len(rsi):
+                return None
+
+            return rsi[rsi_index]
+
+        # -------------------------------------------------
+        # Pivot ها
+        # -------------------------------------------------
 
         pivots_low = []
         pivots_high = []
-
 
         for i in range(
             PIVOT_LEFT,
             len(closes) - PIVOT_RIGHT
         ):
 
-            # -----------------------------
+            left = closes[
+                i - PIVOT_LEFT:i
+            ]
+
+            right = closes[
+                i + 1:i + PIVOT_RIGHT + 1
+            ]
+
             # Pivot Low
-            # -----------------------------
-
-            is_pivot_low = True
-
-            for j in range(
-                i - PIVOT_LEFT,
-                i + PIVOT_RIGHT + 1
+            if (
+                closes[i] < min(left)
+                and closes[i] < min(right)
             ):
-
-                if j == i:
-                    continue
-
-                if lows[i] >= lows[j]:
-
-                    is_pivot_low = False
-                    break
-
-            if is_pivot_low:
 
                 pivots_low.append(i)
 
-
-            # -----------------------------
             # Pivot High
-            # -----------------------------
-
-            is_pivot_high = True
-
-            for j in range(
-                i - PIVOT_LEFT,
-                i + PIVOT_RIGHT + 1
+            if (
+                closes[i] > max(left)
+                and closes[i] > max(right)
             ):
-
-                if j == i:
-                    continue
-
-                if highs[i] <= highs[j]:
-
-                    is_pivot_high = False
-                    break
-
-            if is_pivot_high:
 
                 pivots_high.append(i)
 
+        last_idx = len(closes) - 1
 
         # =================================================
-        # آخرین کندل بسته شده
-        # =================================================
-
-        last_closed_index = len(closes) - 1
-
-
-        # =================================================
-        # BULLISH DIVERGENCE
+        # واگرایی صعودی
         # =================================================
 
         if len(pivots_low) >= 2:
@@ -296,68 +261,49 @@ def check_symbol(symbol):
             idx1 = pivots_low[-2]
             idx2 = pivots_low[-1]
 
-            pivot_age = (
-                last_closed_index - idx2
-            )
-
+            age = last_idx - idx2
             distance = idx2 - idx1
 
-
-            # Pivot باید تازه باشد
+            rsi1 = get_rsi(idx1)
+            rsi2 = get_rsi(idx2)
 
             if (
-                pivot_age <= MAX_PIVOT_AGE
-                and distance > 0
-                and distance <= MAX_PIVOT_DISTANCE
+                rsi1 is not None
+                and rsi2 is not None
+                and age <= MAX_SIGNAL_AGE
+                and 0 < distance <= MAX_PIVOT_DISTANCE
             ):
 
-                rsi_idx1 = idx1 - rsi_offset
-                rsi_idx2 = idx2 - rsi_offset
+                price1 = closes[idx1]
+                price2 = closes[idx2]
 
+                # قیمت کف جدیدتر پایین‌تر
+                # RSI کف جدیدتر بالاتر
                 if (
-                    rsi_idx1 >= 0
-                    and rsi_idx2 >= 0
-                    and rsi_idx1 < len(rsi)
-                    and rsi_idx2 < len(rsi)
+                    price2 < price1
+                    and rsi2 > rsi1
                 ):
 
-                    rsi1 = rsi[rsi_idx1]
-                    rsi2 = rsi[rsi_idx2]
-
-
-                    # قیمت کف پایین‌تر
-                    # RSI کف بالاتر
-
-                    if (
-                        lows[idx2] < lows[idx1]
-                        and rsi2 > rsi1
-                    ):
-
-                        return {
-                            "symbol": symbol,
-                            "type": "صعودی 📈",
-                            "signal_time": times[idx2],
-                            "price": closes[-1],
-                            "rsi": rsi[-1],
-
-                            "p1_time": datetime.fromtimestamp(
-                                times[idx1] / 1000
-                            ).strftime("%H:%M"),
-
-                            "p1_price": lows[idx1],
-                            "p1_rsi": rsi1,
-
-                            "p2_time": datetime.fromtimestamp(
-                                times[idx2] / 1000
-                            ).strftime("%H:%M"),
-
-                            "p2_price": lows[idx2],
-                            "p2_rsi": rsi2
-                        }
-
+                    return {
+                        "symbol": symbol,
+                        "type": "صعودی 📈",
+                        "signal_time": times[idx2],
+                        "price": closes[-1],
+                        "rsi": rsi2,
+                        "p1_time": datetime.fromtimestamp(
+                            times[idx1] / 1000
+                        ).strftime("%H:%M"),
+                        "p1_price": price1,
+                        "p1_rsi": rsi1,
+                        "p2_time": datetime.fromtimestamp(
+                            times[idx2] / 1000
+                        ).strftime("%H:%M"),
+                        "p2_price": price2,
+                        "p2_rsi": rsi2
+                    }
 
         # =================================================
-        # BEARISH DIVERGENCE
+        # واگرایی نزولی
         # =================================================
 
         if len(pivots_high) >= 2:
@@ -365,171 +311,150 @@ def check_symbol(symbol):
             idx1 = pivots_high[-2]
             idx2 = pivots_high[-1]
 
-            pivot_age = (
-                last_closed_index - idx2
-            )
-
+            age = last_idx - idx2
             distance = idx2 - idx1
 
+            rsi1 = get_rsi(idx1)
+            rsi2 = get_rsi(idx2)
 
             if (
-                pivot_age <= MAX_PIVOT_AGE
-                and distance > 0
-                and distance <= MAX_PIVOT_DISTANCE
+                rsi1 is not None
+                and rsi2 is not None
+                and age <= MAX_SIGNAL_AGE
+                and 0 < distance <= MAX_PIVOT_DISTANCE
             ):
 
-                rsi_idx1 = idx1 - rsi_offset
-                rsi_idx2 = idx2 - rsi_offset
+                price1 = closes[idx1]
+                price2 = closes[idx2]
 
+                # قیمت سقف جدیدتر بالاتر
+                # RSI سقف جدیدتر پایین‌تر
                 if (
-                    rsi_idx1 >= 0
-                    and rsi_idx2 >= 0
-                    and rsi_idx1 < len(rsi)
-                    and rsi_idx2 < len(rsi)
+                    price2 > price1
+                    and rsi2 < rsi1
                 ):
 
-                    rsi1 = rsi[rsi_idx1]
-                    rsi2 = rsi[rsi_idx2]
-
-
-                    # قیمت سقف بالاتر
-                    # RSI سقف پایین‌تر
-
-                    if (
-                        highs[idx2] > highs[idx1]
-                        and rsi2 < rsi1
-                    ):
-
-                        return {
-                            "symbol": symbol,
-                            "type": "نزولی 📉",
-                            "signal_time": times[idx2],
-                            "price": closes[-1],
-                            "rsi": rsi[-1],
-
-                            "p1_time": datetime.fromtimestamp(
-                                times[idx1] / 1000
-                            ).strftime("%H:%M"),
-
-                            "p1_price": highs[idx1],
-                            "p1_rsi": rsi1,
-
-                            "p2_time": datetime.fromtimestamp(
-                                times[idx2] / 1000
-                            ).strftime("%H:%M"),
-
-                            "p2_price": highs[idx2],
-                            "p2_rsi": rsi2
-                        }
-
+                    return {
+                        "symbol": symbol,
+                        "type": "نزولی 📉",
+                        "signal_time": times[idx2],
+                        "price": closes[-1],
+                        "rsi": rsi2,
+                        "p1_time": datetime.fromtimestamp(
+                            times[idx1] / 1000
+                        ).strftime("%H:%M"),
+                        "p1_price": price1,
+                        "p1_rsi": rsi1,
+                        "p2_time": datetime.fromtimestamp(
+                            times[idx2] / 1000
+                        ).strftime("%H:%M"),
+                        "p2_price": price2,
+                        "p2_rsi": rsi2
+                    }
 
     except Exception as e:
 
         print(
-            f"❌ Error {symbol}: {e}"
+            f"❌ {symbol} error: {e}"
         )
 
     return None
 
 
 # =========================================================
-# TELEGRAM MESSAGE
+# ساخت پیام تلگرام
 # =========================================================
 
 def build_message(signal):
 
     message = ""
 
-    message += (
-        f"🚨 واگرایی {signal['type']}\n\n"
-    )
+    message += "🚨 واگرایی جدید پیدا شد!\n\n"
 
-    message += (
-        f"📊 ارز: {signal['symbol']}\n"
-    )
-
-    message += (
-        f"⏱ تایم‌فریم: {TIMEFRAME}\n"
-    )
+    message += f"📊 ارز: {signal['symbol']}\n"
+    message += f"📈 نوع: {signal['type']}\n\n"
 
     message += (
         f"💰 قیمت فعلی: "
-        f"{signal['price']:.8f}\n"
+        f"{signal['price']}\n"
     )
 
     message += (
-        f"📊 RSI فعلی: "
+        f"📊 RSI: "
         f"{signal['rsi']:.2f}\n\n"
     )
 
     message += (
-        f"📍 نقطه اول: "
+        f"📍 نقطه ۱: "
         f"{signal['p1_time']}\n"
     )
 
     message += (
-        f"   قیمت: "
+        f"قیمت: "
         f"{signal['p1_price']:.8f}\n"
     )
 
     message += (
-        f"   RSI: "
+        f"RSI: "
         f"{signal['p1_rsi']:.2f}\n\n"
     )
 
     message += (
-        f"📍 نقطه دوم: "
+        f"📍 نقطه ۲: "
         f"{signal['p2_time']}\n"
     )
 
     message += (
-        f"   قیمت: "
+        f"قیمت: "
         f"{signal['p2_price']:.8f}\n"
     )
 
     message += (
-        f"   RSI: "
+        f"RSI: "
         f"{signal['p2_rsi']:.2f}\n\n"
     )
 
-    message += (
-        "⚠️ این فقط هشدار واگرایی است؛ "
-        "هیچ معامله‌ای انجام نمی‌شود."
-    )
+    message += "⏱ تایم‌فریم: 5 دقیقه\n"
+    message += "⚠️ فقط هشدار — بدون معامله"
 
     return message
 
 
 # =========================================================
-# TELEGRAM BOT LOOP
+# ربات تلگرام
 # =========================================================
 
 async def bot_loop():
 
-    bot = Bot(TOKEN)
+    if not TOKEN:
 
-    chat_id = None
+        print("❌ TOKEN پیدا نشد.")
+
+        return
+
+    bot = Bot(TOKEN)
 
     sent_signals = set()
 
+    chat_id = None
+
+    startup_sent = False
+
+    print("")
+    print("================================")
     print("🤖 Trading Alert Bot Started")
-
-    print(
-        f"⏱ Timeframe: {TIMEFRAME}"
-    )
-
-    print(
-        f"📊 Max symbols: {MAX_SYMBOLS}"
-    )
-
+    print("⏱ Timeframe: 5m")
+    print("📊 Symbols: 100")
+    print("================================")
+    print("")
 
     while True:
 
         try:
 
-            # =============================================
-            # دریافت پیام‌های تلگرام
-            # =============================================
+            # ---------------------------------------------
+            # دریافت آخرین پیام‌های تلگرام
+            # ---------------------------------------------
 
             updates = await bot.get_updates(
                 timeout=5
@@ -541,67 +466,72 @@ async def bot_loop():
 
                     if update.message:
 
-                        chat_id = (
-                            update.message.chat_id
-                        )
+                        chat_id = update.message.chat_id
 
-                        print(
-                            f"📱 Chat ID: {chat_id}"
-                        )
-
-
-                        # پیام شروع
-
+                        # اگر /start فرستاده شد
                         if (
                             update.message.text
-                            and
-                            update.message.text.startswith(
-                                "/start"
-                            )
+                            == "/start"
                         ):
 
                             await bot.send_message(
                                 chat_id=chat_id,
                                 text=(
-                                    "✅ ربات هشدار "
-                                    "واگرایی فعال است.\n\n"
-                                    "📊 Toobit\n"
-                                    "⏱ تایم‌فریم 5 دقیقه\n"
-                                    "📈 RSI Divergence\n\n"
-                                    "ربات فقط هشدار می‌دهد "
-                                    "و معامله‌ای انجام نمی‌دهد."
+                                    "✅ ربات فعال است!\n\n"
+                                    "واگرایی‌های تازه "
+                                    "تایم‌فریم 5 دقیقه "
+                                    "را بررسی می‌کنم."
                                 )
                             )
 
+            # ---------------------------------------------
+            # پیام اجرای موفق
+            # ---------------------------------------------
 
-            # =============================================
-            # اگر هنوز Chat ID نداریم
-            # =============================================
+            if chat_id and not startup_sent:
 
-            if chat_id is None:
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=(
+                        "🚀 کد با موفقیت اجرا شد! ✅\n\n"
+                        "🤖 ربات هشدار واگرایی فعال است.\n"
+                        "⏱ تایم‌فریم: 5 دقیقه\n"
+                        "📊 در حال اسکن 100 ارز\n\n"
+                        "⚠️ فقط هشدار ارسال می‌شود؛ "
+                        "هیچ معامله‌ای انجام نمی‌شود."
+                    )
+                )
+
+                startup_sent = True
 
                 print(
-                    "⏳ هنوز پیام /start از تلگرام دریافت نشده."
+                    "✅ Startup message sent to Telegram"
                 )
 
-                await asyncio.sleep(
-                    SCAN_INTERVAL
+            # ---------------------------------------------
+            # اگر هنوز Chat ID نداریم
+            # ---------------------------------------------
+
+            if not chat_id:
+
+                print(
+                    "⏳ Waiting for Telegram /start..."
                 )
+
+                await asyncio.sleep(5)
 
                 continue
 
-
-            # =============================================
-            # دریافت نمادها
-            # =============================================
+            # ---------------------------------------------
+            # دریافت ارزها
+            # ---------------------------------------------
 
             symbols = get_all_symbols()
-
 
             if not symbols:
 
                 print(
-                    "❌ هیچ نمادی دریافت نشد."
+                    "⚠️ No symbols received."
                 )
 
                 await asyncio.sleep(
@@ -610,42 +540,29 @@ async def bot_loop():
 
                 continue
 
-
             print(
-                f"🔎 شروع اسکن {len(symbols)} ارز..."
+                f"🔎 Scanning {len(symbols)} symbols..."
             )
-
 
             signals_found = 0
 
-
-            # =============================================
+            # ---------------------------------------------
             # اسکن ارزها
-            # =============================================
+            # ---------------------------------------------
 
             for symbol in symbols:
 
-                signal = check_symbol(
-                    symbol
-                )
-
+                signal = check_symbol(symbol)
 
                 if signal:
 
-                    # زمان Pivot دوم
-                    signal_time = (
-                        signal["signal_time"]
-                    )
-
-                    # کلید یکتا
                     signal_key = (
                         f"{symbol}_"
                         f"{signal['type']}_"
-                        f"{signal_time}"
+                        f"{signal['signal_time']}"
                     )
 
-
-                    # فقط یک بار ارسال
+                    # جلوگیری از ارسال دوباره
                     if signal_key not in sent_signals:
 
                         sent_signals.add(
@@ -656,68 +573,49 @@ async def bot_loop():
                             signal
                         )
 
-
                         await bot.send_message(
                             chat_id=chat_id,
                             text=message
                         )
 
-
                         signals_found += 1
 
-
                         print(
-                            f"🚨 SIGNAL: "
-                            f"{symbol} "
-                            f"{signal['type']} "
-                            f"{signal['p2_time']}"
+                            f"🚨 NEW SIGNAL | "
+                            f"{symbol} | "
+                            f"{signal['type']}"
                         )
 
-
-                # کمی مکث برای جلوگیری از فشار زیاد
+                # کمی فاصله برای جلوگیری از فشار
                 await asyncio.sleep(0.05)
 
-
-            # =============================================
-            # گزارش اسکن
-            # =============================================
-
             print(
-                f"✅ اسکن تمام شد | "
-                f"{signals_found} سیگنال جدید | "
+                f"⏰ Scan finished | "
+                f"New signals: {signals_found} | "
                 f"{datetime.now().strftime('%H:%M:%S')}"
             )
 
+            print("")
 
-            # =============================================
-            # پاک کردن سیگنال‌های خیلی قدیمی
-            # =============================================
-
-            if len(sent_signals) > 5000:
-
-                sent_signals = set(
-                    list(sent_signals)[-2000:]
-                )
-
+            # ---------------------------------------------
+            # انتظار تا اسکن بعدی
+            # ---------------------------------------------
 
             await asyncio.sleep(
                 SCAN_INTERVAL
             )
 
-
         except Exception as e:
 
             print(
-                f"❌ خطا در Bot Loop: {e}"
+                f"❌ Bot loop error: {e}"
             )
 
-            await asyncio.sleep(
-                30
-            )
+            await asyncio.sleep(30)
 
 
 # =========================================================
-# RUN BOT
+# اجرای Bot
 # =========================================================
 
 def run_bot():
@@ -727,15 +625,15 @@ def run_bot():
     )
 
 
-# =========================================================
-# START
-# =========================================================
-
 threading.Thread(
     target=run_bot,
     daemon=True
 ).start()
 
+
+# =========================================================
+# اجرای Flask برای Render
+# =========================================================
 
 if __name__ == "__main__":
 
@@ -743,7 +641,11 @@ if __name__ == "__main__":
         "🌐 Flask server starting..."
     )
 
+    port = int(
+        os.getenv("PORT", 10000)
+    )
+
     app.run(
         host="0.0.0.0",
-        port=10000
+        port=port
     )
